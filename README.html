@@ -156,16 +156,27 @@
             <span class="hljs-keyword">co_return</span> args;
         }
     );
-    pool.<span class="hljs-built_in">run</span>(server.<span class="hljs-built_in">start</span>()).<span class="hljs-built_in">wait</span>();
+
+    <span class="hljs-keyword">auto</span> server_coro = [&amp;server]() -&gt; DetachedTask {
+        <span class="hljs-keyword">co_await</span> server.<span class="hljs-built_in">start</span>();
+        <span class="hljs-keyword">co_return</span>;
+    };
+    <span class="hljs-keyword">auto</span> dt = <span class="hljs-built_in">server_coro</span>();
+    <span class="hljs-keyword">auto</span> h = dt.handle;
+    dt.<span class="hljs-built_in">detach</span>();
+    pool.<span class="hljs-built_in">enqueue_raw</span>([h]() { h.<span class="hljs-built_in">resume</span>(); });
 
     <span class="hljs-comment">// --- Client side ---</span>
-    <span class="hljs-function">MCPClient <span class="hljs-title">client</span><span class="hljs-params">(MCPTransport::create_tcp(<span class="hljs-string">&quot;127.0.0.1&quot;</span>, <span class="hljs-number">9876</span>))</span></span>;
-    <span class="hljs-keyword">auto</span> fut = pool.<span class="hljs-built_in">run</span>([&amp;]() -&gt; AsyncTask&lt;<span class="hljs-type">void</span>&gt; {
+    <span class="hljs-function">MCPClient <span class="hljs-title">client</span><span class="hljs-params">(MCPTransport::create_http(<span class="hljs-string">&quot;127.0.0.1&quot;</span>, <span class="hljs-number">9876</span>, <span class="hljs-string">&quot;/mcp&quot;</span>))</span></span>;
+
+    <span class="hljs-keyword">auto</span> client_task = [&amp;client]() -&gt; AsyncTask&lt;<span class="hljs-type">void</span>&gt; {
         <span class="hljs-keyword">co_await</span> client.<span class="hljs-built_in">connect_async</span>();
         <span class="hljs-keyword">co_await</span> client.<span class="hljs-built_in">initialize</span>();
-        <span class="hljs-keyword">auto</span> result = <span class="hljs-keyword">co_await</span> client.<span class="hljs-built_in">call_tool_async</span>(<span class="hljs-string">&quot;echo&quot;</span>, JSON{{<span class="hljs-string">&quot;msg&quot;</span>,<span class="hljs-string">&quot;hi&quot;</span>}});
+        <span class="hljs-keyword">auto</span> result = <span class="hljs-keyword">co_await</span> client.<span class="hljs-built_in">call_tool_async</span>(<span class="hljs-string">&quot;echo&quot;</span>, JSON{{<span class="hljs-string">&quot;msg&quot;</span>, <span class="hljs-string">&quot;hi&quot;</span>}});
         std::<span class="hljs-built_in">println</span>(<span class="hljs-string">&quot;Result: {}&quot;</span>, *result);
-    });
+    };
+
+    <span class="hljs-keyword">auto</span> fut = pool.<span class="hljs-built_in">run</span>(<span class="hljs-built_in">client_task</span>());
     fut.<span class="hljs-built_in">get</span>();
 }
 </code></pre>
@@ -183,12 +194,19 @@
 <li><a href="#json-rpc-20-poorijsonrpchpp">JSON-RPC 2.0 (<code>poorijsonrpc.hpp</code>)</a></li>
 <li><a href="#process-management-pooriprocesshpp">Process Management (<code>pooriprocess.hpp</code>)</a></li>
 <li><a href="#async-io-asyncorehpp--io_thread_poolhpp">Async I/O (<code>asyncore.hpp</code> + <code>io_thread_pool.hpp</code>)</a></li>
+<li><a href="#http-client-poorimcphpp--asynchttpclient">HTTP Client (<code>poorimcp.hpp</code> — <code>AsyncHTTPClient</code>)</a></li>
 <li><a href="#mcp-layer-poorimcphpp">MCP Layer (<code>poorimcp.hpp</code>)</a></li>
 </ul>
 </li>
 <li><a href="#requirements">Requirements</a></li>
 <li><a href="#project-structure">Project Structure</a></li>
 <li><a href="#building">Building</a></li>
+<li><a href="#transport-protocols">Transport Protocols</a>
+<ul>
+<li><a href="#1-stdio">1. STDIO</a></li>
+<li><a href="#2-http-streamable-http">2. HTTP (Streamable HTTP)</a></li>
+</ul>
+</li>
 <li><a href="#core-components">Core Components</a></li>
 <li><a href="#usage">Usage</a>
 <ul>
@@ -196,8 +214,8 @@
 <li><a href="#server-starting">Server: Starting</a></li>
 <li><a href="#client-connecting-and-discovering-tools">Client: Connecting and Discovering Tools</a></li>
 <li><a href="#client-calling-tools">Client: Calling Tools</a></li>
-<li><a href="#transport-tcp">Transport: TCP</a></li>
 <li><a href="#transport-stdio">Transport: STDIO</a></li>
+<li><a href="#transport-http">Transport: HTTP</a></li>
 </ul>
 </li>
 <li><a href="#comparison-with-other-c-mcp-implementations">Comparison with Other C++ MCP Implementations</a></li>
@@ -239,13 +257,18 @@
 <td><code>pooriasync</code> — C++23 coroutines, epoll/kqueue/select reactor, <code>DetachedTask</code></td>
 </tr>
 <tr>
+<td>HTTP</td>
+<td><code>cpp-httplib</code> or <code>libcurl</code></td>
+<td><code>AsyncHTTPClient</code> — built on <code>AsyncSocket</code>, no external deps</td>
+</tr>
+<tr>
 <td>MCP</td>
 <td>Glue layer</td>
 <td><code>poorimcp</code> — <code>MCPServer</code>, <code>MCPClient</code>, <code>MCPTransport</code>, <code>ToolHandler</code></td>
 </tr>
 </tbody>
 </table>
-<p><strong>No <code>boost</code>. No <code>nlohmann</code>. No <code>asio</code>. No <code>libuv</code>. No exceptions for control flow.</strong></p>
+<p><strong>No <code>boost</code>. No <code>nlohmann</code>. No <code>asio</code>. No <code>libuv</code>. No <code>cpp-httplib</code>. No exceptions for control flow.</strong></p>
 <hr>
 <h2 id="architecture">Architecture</h2>
 <pre><code>┌────────────────────────────────────────────────┐
@@ -254,8 +277,8 @@
 │  │ MCPServer   │  │ MCPClient               │  │
 │  │ MCPTransport│  │   connect_async()       │  │
 │  │ ToolHandler │  │   initialize()          │  │
-│  └──────┬──────┘  │   call_tool_async()     │  │
-│         │         └────────────┬────────────┘  │
+│  │ AsyncHTTPCli│  │   call_tool_async()     │  │
+│  └──────┬──────┘  └────────────┬────────────┘  │
 │         │                      │               │
 ├─────────┼──────────────────────┼───────────────┤
 │         ▼                      ▼               │
@@ -326,22 +349,30 @@
 <li><strong><code>std::span</code> buffers</strong> — zero-copy, bounds-safe I/O</li>
 <li><strong><code>std::expected</code> errors</strong> — transport I/O returns <code>std::expected&lt;T, std::error_code&gt;</code>, never throws</li>
 </ul>
+<h3 id="http-client-poorimcphpp--asynchttpclient">HTTP Client (<code>poorimcp.hpp</code> — <code>AsyncHTTPClient</code>)</h3>
+<ul>
+<li><strong>Built on <code>AsyncSocket</code></strong> — no <code>cpp-httplib</code>, no <code>libcurl</code>, no external HTTP library</li>
+<li><strong><code>co_await post()</code> / <code>co_await get()</code></strong> — coroutine-based, non-blocking</li>
+<li><strong>HTTP/1.1 parsing</strong> — status line, headers, Content-Length, body extraction</li>
+<li><strong><code>Connection: close</code></strong> — simple, reliable request/response cycle</li>
+<li><strong><code>std::expected&lt;std::string, std::error_code&gt;</code></strong> — error-free return type</li>
+</ul>
 <h3 id="mcp-layer-poorimcphpp">MCP Layer (<code>poorimcp.hpp</code>)</h3>
 <ul>
-<li><strong><code>MCPTransport</code></strong> — unified TCP (<code>AsyncSocket</code>) and STDIO (<code>AsyncPipe</code> + <code>Process</code>) transport</li>
-<li><strong><code>MCPServer</code></strong> — async accept loop, per-client <code>DetachedTask</code>, multi-request connection persistence</li>
+<li><strong>Official transports only</strong> — STDIO (subprocess + pipes) and HTTP (Streamable HTTP POST)</li>
+<li><strong><code>MCPTransport</code></strong> — unified factory: <code>create_stdio()</code> / <code>create_http()</code></li>
+<li><strong><code>MCPServer</code></strong> — HTTP server with tool registration, multi-request connection persistence, HTTP request parsing (Content-Length, headers, body extraction), HTTP response building</li>
 <li><strong><code>MCPClient</code></strong> — async connect, initialize, tool discovery, tool invocation</li>
-<li><strong><code>ToolHandler</code></strong> — move-only, type-erased handler for <code>AsyncTask&lt;JSON&gt;(const JSON&amp;)</code> (replaces <code>std::function</code>)</li>
+<li><strong><code>ToolHandler</code></strong> — move-only, type-erased handler for <code>AsyncTask&lt;JSON&gt;(const JSON&amp;)</code></li>
 <li><strong><code>SocketAwaitable</code></strong> — public awaitable for raw socket event registration</li>
 <li><strong>Transparent tool map</strong> — zero-allocation tool lookup by <code>std::string_view</code></li>
 <li><strong><code>rpc::make_*</code> integration</strong> — uses <code>poorijsonrpc</code> helpers for all JSON-RPC message construction</li>
-<li><strong><code>\r\n</code> handling</strong> — trims trailing <code>CR</code> from newline-delimited JSON</li>
 <li><strong>Graceful shutdown</strong> — <code>CancellationToken</code> in server, <code>stop()</code> method</li>
 </ul>
 <hr>
 <h2 id="requirements">Requirements</h2>
 <ul>
-<li><strong>C++23</strong> (<code>std::expected</code>, <code>std::coroutine</code>, <code>std::move_only_function</code> (or equivalent), <code>std::span</code>, <code>std::binary_semaphore</code>)</li>
+<li><strong>C++23</strong> (<code>std::expected</code>, <code>std::coroutine</code>, <code>std::span</code>, <code>std::binary_semaphore</code>)</li>
 <li>Clang 16+ (macOS/Linux), MSVC 19.34+ (Windows)</li>
 <li>No external dependencies</li>
 </ul>
@@ -370,6 +401,30 @@ clang++ -std=c++23 -O3 -I include src/main.cpp -o bin/poorimcp_test
 cl /std:c++<span class="hljs-number">23</span> /EHsc /I include src/main.cpp ws2_32.lib /out:bin\poorimcp_test.exe
 .\bin\poorimcp_test.exe
 </code></pre>
+<hr>
+<h2 id="transport-protocols">Transport Protocols</h2>
+<p>PooriMCP supports the two official MCP transports defined by the
+<a href="https://modelcontextprotocol.io">Model Context Protocol specification</a>:</p>
+<h3 id="1-stdio">1. STDIO</h3>
+<p>The server runs as a subprocess. Communication uses newline-delimited
+JSON-RPC over the child process's stdin/stdout pipes.</p>
+<pre><code class="language-cpp"><span class="hljs-keyword">auto</span> transport = MCPTransport::<span class="hljs-built_in">create_stdio</span>(
+    <span class="hljs-string">&quot;npx&quot;</span>,
+    {<span class="hljs-string">&quot;-y&quot;</span>, <span class="hljs-string">&quot;@modelcontextprotocol/server-filesystem&quot;</span>, <span class="hljs-string">&quot;/tmp&quot;</span>}
+);
+<span class="hljs-function">MCPClient <span class="hljs-title">client</span><span class="hljs-params">(std::move(transport))</span></span>;
+</code></pre>
+<p>Internally: <code>Process</code> spawns the subprocess (<code>fork</code>+<code>execvp</code> on POSIX,
+<code>CreateProcessW</code> on Windows). <code>AsyncPipe</code> wraps the stdin/stdout pipes
+and registers them with the reactor (<code>epoll</code>/<code>kqueue</code>/<code>select</code>).</p>
+<h3 id="2-http-streamable-http">2. HTTP (Streamable HTTP)</h3>
+<p>The server runs as an HTTP endpoint. Each JSON-RPC request is sent as
+an HTTP <code>POST</code> and the response body is the JSON-RPC reply.</p>
+<pre><code class="language-cpp"><span class="hljs-keyword">auto</span> transport = MCPTransport::<span class="hljs-built_in">create_http</span>(<span class="hljs-string">&quot;localhost&quot;</span>, <span class="hljs-number">8931</span>, <span class="hljs-string">&quot;/mcp&quot;</span>);
+<span class="hljs-function">MCPClient <span class="hljs-title">client</span><span class="hljs-params">(std::move(transport))</span></span>;
+</code></pre>
+<p>Internally: <code>AsyncHTTPClient</code> builds an HTTP/1.1 request, sends it via
+<code>AsyncSocket</code>, and reads the response. No external HTTP library needed.</p>
 <hr>
 <h2 id="core-components">Core Components</h2>
 <table>
@@ -452,14 +507,19 @@ cl /std:c++<span class="hljs-number">23</span> /EHsc /I include src/main.cpp ws2
 <td>Type-erased move-only callable</td>
 </tr>
 <tr>
+<td><code>AsyncHTTPClient</code></td>
+<td><code>poorimcp.hpp</code></td>
+<td>HTTP/1.1 client built on <code>AsyncSocket</code></td>
+</tr>
+<tr>
 <td><code>MCPTransport</code></td>
 <td><code>poorimcp.hpp</code></td>
-<td>Unified TCP/stdio transport</td>
+<td>Unified STDIO/HTTP transport</td>
 </tr>
 <tr>
 <td><code>MCPServer</code></td>
 <td><code>poorimcp.hpp</code></td>
-<td>Async MCP server with tool registration</td>
+<td>HTTP MCP server with tool registration</td>
 </tr>
 <tr>
 <td><code>MCPClient</code></td>
@@ -486,10 +546,9 @@ server.<span class="hljs-built_in">register_tool</span>(
         std::string op = args[<span class="hljs-string">&quot;op&quot;</span>].<span class="hljs-built_in">get_string</span>();
 
         JSON result;
-        <span class="hljs-keyword">if</span> (op == <span class="hljs-string">&quot;add&quot;</span>)       result[<span class="hljs-string">&quot;result&quot;</span>] = a + b;
-        <span class="hljs-keyword">else</span> <span class="hljs-keyword">if</span> (op == <span class="hljs-string">&quot;subtract&quot;</span>) result[<span class="hljs-string">&quot;result&quot;</span>] = a - b;
-        <span class="hljs-keyword">else</span>
-            result[<span class="hljs-string">&quot;error&quot;</span>] = <span class="hljs-string">&quot;unknown operation&quot;</span>;
+        <span class="hljs-keyword">if</span> (op == <span class="hljs-string">&quot;add&quot;</span>)            { result[<span class="hljs-string">&quot;result&quot;</span>] = a + b; }
+        <span class="hljs-keyword">else</span> <span class="hljs-keyword">if</span> (op == <span class="hljs-string">&quot;subtract&quot;</span>)  { result[<span class="hljs-string">&quot;result&quot;</span>] = a - b; }
+        <span class="hljs-keyword">else</span>                       { result[<span class="hljs-string">&quot;error&quot;</span>] = <span class="hljs-string">&quot;unknown operation&quot;</span>; }
 
         <span class="hljs-keyword">co_return</span> result;
     }
@@ -497,10 +556,8 @@ server.<span class="hljs-built_in">register_tool</span>(
 </code></pre>
 <h3 id="server-starting">Server: Starting</h3>
 <pre><code class="language-cpp">ThreadPool pool{<span class="hljs-number">4</span>};
-pool.<span class="hljs-built_in">run</span>(server.<span class="hljs-built_in">start</span>()).<span class="hljs-built_in">wait</span>();  <span class="hljs-comment">// Blocks until server stops</span>
-</code></pre>
-<p>Or start as a detached task:</p>
-<pre><code class="language-cpp"><span class="hljs-keyword">auto</span> server_coro = [&amp;server]() -&gt; DetachedTask {
+
+<span class="hljs-keyword">auto</span> server_coro = [&amp;server]() -&gt; DetachedTask {
     <span class="hljs-keyword">co_await</span> server.<span class="hljs-built_in">start</span>();
     <span class="hljs-keyword">co_return</span>;
 };
@@ -510,7 +567,7 @@ dt.<span class="hljs-built_in">detach</span>();
 pool.<span class="hljs-built_in">enqueue_raw</span>([h]() { h.<span class="hljs-built_in">resume</span>(); });
 </code></pre>
 <h3 id="client-connecting-and-discovering-tools">Client: Connecting and Discovering Tools</h3>
-<pre><code class="language-cpp"><span class="hljs-function">MCPClient <span class="hljs-title">client</span><span class="hljs-params">(MCPTransport::create_tcp(<span class="hljs-string">&quot;127.0.0.1&quot;</span>, <span class="hljs-number">9876</span>))</span></span>;
+<pre><code class="language-cpp"><span class="hljs-function">MCPClient <span class="hljs-title">client</span><span class="hljs-params">(MCPTransport::create_http(<span class="hljs-string">&quot;127.0.0.1&quot;</span>, <span class="hljs-number">9876</span>, <span class="hljs-string">&quot;/mcp&quot;</span>))</span></span>;
 
 <span class="hljs-keyword">auto</span> client_task = [&amp;client]() -&gt; AsyncTask&lt;<span class="hljs-type">void</span>&gt; {
     <span class="hljs-keyword">co_await</span> client.<span class="hljs-built_in">connect_async</span>();
@@ -540,15 +597,15 @@ fut.<span class="hljs-built_in">get</span>();
 <span class="hljs-keyword">auto</span> fut = pool.<span class="hljs-built_in">run</span>(<span class="hljs-built_in">call_task</span>());
 fut.<span class="hljs-built_in">get</span>();
 </code></pre>
-<h3 id="transport-tcp">Transport: TCP</h3>
-<pre><code class="language-cpp"><span class="hljs-keyword">auto</span> transport = MCPTransport::<span class="hljs-built_in">create_tcp</span>(<span class="hljs-string">&quot;192.168.1.100&quot;</span>, <span class="hljs-number">9000</span>);
-<span class="hljs-function">MCPClient <span class="hljs-title">client</span><span class="hljs-params">(std::move(transport))</span></span>;
-</code></pre>
 <h3 id="transport-stdio">Transport: STDIO</h3>
 <pre><code class="language-cpp"><span class="hljs-keyword">auto</span> transport = MCPTransport::<span class="hljs-built_in">create_stdio</span>(
     <span class="hljs-string">&quot;/usr/local/bin/node&quot;</span>,
     {<span class="hljs-string">&quot;/path/to/mcp-server.js&quot;</span>, <span class="hljs-string">&quot;--stdio&quot;</span>}
 );
+<span class="hljs-function">MCPClient <span class="hljs-title">client</span><span class="hljs-params">(std::move(transport))</span></span>;
+</code></pre>
+<h3 id="transport-http">Transport: HTTP</h3>
+<pre><code class="language-cpp"><span class="hljs-keyword">auto</span> transport = MCPTransport::<span class="hljs-built_in">create_http</span>(<span class="hljs-string">&quot;localhost&quot;</span>, <span class="hljs-number">8931</span>, <span class="hljs-string">&quot;/mcp&quot;</span>);
 <span class="hljs-function">MCPClient <span class="hljs-title">client</span><span class="hljs-params">(std::move(transport))</span></span>;
 </code></pre>
 <hr>
@@ -564,8 +621,8 @@ fut.<span class="hljs-built_in">get</span>();
 <tbody>
 <tr>
 <td><strong>Dependencies</strong></td>
-<td><strong>Zero</strong> — no boost, no nlohmann, no asio</td>
-<td>Usually 2–5 deps (boost, nlohmann/json, asio, spdlog, etc.)</td>
+<td><strong>Zero</strong> — no boost, no nlohmann, no asio, no cpp-httplib</td>
+<td>Usually 2–5 deps (boost, nlohmann/json, asio, cpp-httplib, etc.)</td>
 </tr>
 <tr>
 <td><strong>Async model</strong></td>
@@ -591,6 +648,11 @@ fut.<span class="hljs-built_in">get</span>();
 <td><strong>Process management</strong></td>
 <td><strong>RAII</strong> — no zombies, noexcept <code>terminate()</code>, idempotent <code>wait()</code></td>
 <td><code>popen()</code> (leaks, no stderr), or <code>boost::process</code> (heavy dep)</td>
+</tr>
+<tr>
+<td><strong>HTTP client</strong></td>
+<td><strong><code>AsyncHTTPClient</code></strong> — built on <code>AsyncSocket</code>, no external deps</td>
+<td><code>cpp-httplib</code> or <code>libcurl</code> (external dependency)</td>
 </tr>
 <tr>
 <td><strong>Reactor</strong></td>
@@ -648,14 +710,19 @@ fut.<span class="hljs-built_in">get</span>();
 <td>Requires perfect JSON from the model</td>
 </tr>
 <tr>
-<td><strong>Connection persistence</strong></td>
-<td><strong>Multi-request loop</strong> — one connection, many requests</td>
-<td>Often one-request-per-connection</td>
+<td><strong>Transport</strong></td>
+<td><strong>Official spec only</strong> — STDIO + HTTP (Streamable HTTP)</td>
+<td>Often custom TCP or non-spec-compliant</td>
 </tr>
 <tr>
-<td><strong>Line framing</strong></td>
-<td><strong><code>\r\n</code> aware</strong> — trims trailing <code>CR</code></td>
-<td>Usually assumes <code>\n</code> only</td>
+<td><strong>Server</strong></td>
+<td><strong>HTTP server</strong> — parses HTTP requests, builds HTTP responses</td>
+<td>Often raw TCP or requires external HTTP server</td>
+</tr>
+<tr>
+<td><strong>Connection persistence</strong></td>
+<td><strong>Multi-request HTTP</strong> — one connection, multiple requests</td>
+<td>Often one-request-per-connection</td>
 </tr>
 <tr>
 <td><strong>Server shutdown</strong></td>
@@ -672,20 +739,22 @@ fut.<span class="hljs-built_in">get</span>();
 <hr>
 <h2 id="limitations-and-gotchas">Limitations and Gotchas</h2>
 <ol>
-<li><strong>Windows <code>select</code> limit:</strong> The reactor uses <code>select()</code> on Windows, limited to <code>FD_SETSIZE</code> (1024) concurrent sockets. For high-scale Windows deployments, IOCP support would be needed.</li>
+<li><strong>No chunked encoding:</strong> <code>AsyncHTTPClient</code> uses <code>Connection: close</code> and reads until EOF. For chunked transfer encoding or keep-alive, extend the client.</li>
+<li><strong>No TLS/SSL:</strong> HTTP transport is plaintext. For production MCP over network, add TLS (OpenSSL or platform APIs).</li>
+<li><strong>Windows <code>select</code> limit:</strong> The reactor uses <code>select()</code> on Windows, limited to <code>FD_SETSIZE</code> (1024) concurrent sockets.</li>
 <li><strong>Windows IPC latency:</strong> <code>AsyncPipe</code> on Windows uses <code>PeekNamedPipe</code> polling (100ms timeout). For high-performance Windows IPC, IOCP is required.</li>
 <li><strong>No streaming/SAX JSON:</strong> The whole document must be in memory. For very large JSON payloads, a streaming parser would be needed.</li>
 <li><strong><code>sync_wait</code> deadlocks:</strong> Calling <code>sync_wait</code> inside a reactor thread blocks that thread. Use <code>ThreadPool::run()</code> instead.</li>
-<li><strong><code>std::move_only_function</code> availability:</strong> If your standard library doesn't have it, <code>poorimcp.hpp</code> provides a <code>ToolHandler</code> class with the same semantics.</li>
-<li><strong>No TLS/SSL:</strong> TCP transport is plaintext. For production MCP over network, add TLS (OpenSSL or platform APIs).</li>
-<li><strong>Single server per port:</strong> The server binds one port. For multi-port or multi-transport servers, use multiple <code>MCPServer</code> instances on separate threads.</li>
+<li><strong>Thread-Local reactor:</strong> <code>AsyncSocket</code>, <code>AsyncPipe</code>, and <code>AsyncHTTPClient</code> rely on <code>NetworkReactor::current</code> (thread-local). You cannot use them on a thread that is not part of the <code>ThreadPool</code>.</li>
 <li><strong>Coroutine frame heap allocation:</strong> Each <code>co_await</code> creates a coroutine frame on the heap. For ultra-low-latency scenarios, a pooled allocator could be added.</li>
-<li><strong>Object key order is unspecified:</strong> <code>std::unordered_map</code> does not preserve insertion order. If key order matters for protocol compliance, switch to <code>std::map</code> or <code>nlohmann::ordered_json</code>.</li>
-<li><strong><code>ToolHandler</code> always heap-allocates:</strong> No small-buffer-optimization. For high-frequency tool dispatch, consider a pooled allocator.</li>
+<li><strong>Object key order is unspecified:</strong> <code>std::unordered_map</code> does not preserve insertion order. If key order matters for protocol compliance, switch to <code>std::map</code>.</li>
+<li><strong><code>ToolHandler</code> always heap-allocates:</strong> No small-buffer-optimization (SBO). For high-frequency tool dispatch, consider a pooled allocator.</li>
+<li><strong>MCPServer is HTTP-only:</strong> The server accepts HTTP POST requests and responds with HTTP. It does not support STDIO mode (STDIO servers are standalone programs, not embedded classes).</li>
+<li><strong>No SSE streaming:</strong> The HTTP transport does not support Server-Sent Events. Each request gets a single response. For streaming MCP servers, SSE support would be needed.</li>
 </ol>
 <hr>
 <h2 id="license">License</h2>
-<p>Apache License 2.0 — see the headers of each <code>.hpp</code> file.</p>
+<p>Apache License 2.0</p>
 <hr>
 <p><strong>Author:</strong> Pooria Yousefi</p>
 <hr>
