@@ -13,10 +13,10 @@ void print_test_header(const std::string& test_name)
     std::println("\n--- Running Test: {} ---", test_name);
 }
 
-bool test_tcp_echo()
+bool test_http_echo()
 {
     bool success = true;
-    print_test_header("TCP Echo Tool (client → server → response)");
+    print_test_header("HTTP Echo Tool (client → server → response)");
 
     ThreadPool pool{4};
     MCPServer server{9876};
@@ -42,26 +42,22 @@ bool test_tcp_echo()
 
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-    MCPClient client(MCPTransport::create_tcp("127.0.0.1", 9876));
+    MCPClient client(MCPTransport::create_http("127.0.0.1", 9876, "/mcp"));
 
     auto client_task = [&client]() -> AsyncTask<bool>
     {
         bool result = false;
 
-        std::println("  [client] connecting...");
+        std::println("  [client] connect_async...");
         auto connect_result = co_await client.connect_async();
-        std::println("  [client] connect result: {}", connect_result.has_value());
+        std::println("  [client] connect: {}", connect_result.has_value());
 
         if (connect_result.has_value())
         {
-            std::println("  [client] initializing...");
+            std::println("  [client] initialize...");
             auto init_result = co_await client.initialize();
-            std::println("  [client] init result: {}", init_result.has_value());
-            if (init_result.has_value())
-            {
-                std::println("  [client] tools count: {}", client.get_tools().size());
-            }
-            else if (!init_result)
+            std::println("  [client] init: {}", init_result.has_value());
+            if (!init_result)
             {
                 std::println("  [client] init error: {}", init_result.error());
             }
@@ -70,19 +66,15 @@ bool test_tcp_echo()
             {
                 JSON args;
                 args["message"] = "hello mcp!";
-                std::println("  [client] calling echo tool...");
+                std::println("  [client] calling echo...");
                 auto call_result = co_await client.call_tool_async("echo", args);
-                std::println("  [client] call result has_value: {}", call_result.has_value());
-                if (call_result.has_value())
+                std::println("  [client] call has_value: {}", call_result.has_value());
+                if (call_result)
                 {
                     std::println("  [client] response: {}", *call_result);
                     result = (*call_result == args.dump());
                 }
             }
-        }
-        else if (!connect_result)
-        {
-            std::println("  [client] connect error: {}", connect_result.error().message());
         }
 
         co_return result;
@@ -104,10 +96,10 @@ bool test_tcp_echo()
     return success;
 }
 
-bool test_tool_discovery()
+bool test_http_tool_discovery()
 {
     bool success = true;
-    print_test_header("Tool Discovery (tools/list)");
+    print_test_header("HTTP Tool Discovery (tools/list)");
 
     ThreadPool pool{4};
     MCPServer server{9877};
@@ -141,7 +133,7 @@ bool test_tool_discovery()
 
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-    MCPClient client(MCPTransport::create_tcp("127.0.0.1", 9877));
+    MCPClient client(MCPTransport::create_http("127.0.0.1", 9877, "/mcp"));
 
     auto client_task = [&client]() -> AsyncTask<bool>
     {
@@ -176,10 +168,10 @@ bool test_tool_discovery()
     return success;
 }
 
-bool test_missing_tool_error()
+bool test_http_missing_tool_error()
 {
     bool success = true;
-    print_test_header("Missing Tool (error handling)");
+    print_test_header("HTTP Missing Tool (error handling)");
 
     ThreadPool pool{4};
     MCPServer server{9878};
@@ -205,7 +197,7 @@ bool test_missing_tool_error()
 
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-    MCPClient client(MCPTransport::create_tcp("127.0.0.1", 9878));
+    MCPClient client(MCPTransport::create_http("127.0.0.1", 9878, "/mcp"));
 
     auto client_task = [&client]() -> AsyncTask<bool>
     {
@@ -219,7 +211,6 @@ bool test_missing_tool_error()
             {
                 JSON args;
                 auto call_result = co_await client.call_tool_async("nonexistent", args);
-                // Should fail — tool not found.
                 result = !call_result.has_value();
             }
         }
@@ -272,7 +263,6 @@ bool test_server_shutdown()
 
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-    // Stop — should not crash or hang.
     server.stop();
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
@@ -290,15 +280,15 @@ int main()
     {
         bool all_passed = true;
 
-        if (!test_tcp_echo())
+        if (!test_http_echo())
         {
             all_passed = false;
         }
-        if (!test_tool_discovery())
+        if (!test_http_tool_discovery())
         {
             all_passed = false;
         }
-        if (!test_missing_tool_error())
+        if (!test_http_missing_tool_error())
         {
             all_passed = false;
         }
