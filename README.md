@@ -1,0 +1,393 @@
+
+# PooriMCP
+
+A production-grade, fully asynchronous C++23 implementation of the Model Context Protocol (MCP). It combines a zero-dependency JSON library, a JSON-RPC 2.0 framework, a cross-platform process manager, and a coroutine-based async I/O reactor into a single, cohesive library — all built from first principles without any external dependencies.
+
+```cpp
+#include "poorimcp.hpp"
+
+using namespace pooriayousefi::mcp;
+
+int main() {
+    ThreadPool pool{4};
+
+    // --- Server side ---
+    MCPServer server{9876};
+    server.register_tool(
+        MCPTool{"echo", "Echoes back input", JSON(nullptr)},
+        [](const JSON& args) -> AsyncTask<JSON> {
+            co_return args;
+        }
+    );
+    pool.run(server.start()).wait();
+
+    // --- Client side ---
+    MCPClient client(MCPTransport::create_tcp("127.0.0.1", 9876));
+    auto fut = pool.run([&]() -> AsyncTask<void> {
+        co_await client.connect_async();
+        co_await client.initialize();
+        auto result = co_await client.call_tool_async("echo", JSON{{"msg","hi"}});
+        std::println("Result: {}", *result);
+    });
+    fut.get();
+}
+```
+
+---
+
+## Table of contents
+
+- [PooriMCP](#poorimcp)
+  - [Table of contents](#table-of-contents)
+  - [Why PooriMCP?](#why-poorimcp)
+  - [Architecture](#architecture)
+  - [Features](#features)
+    - [JSON Foundation (`poorijson.hpp`)](#json-foundation-poorijsonhpp)
+    - [JSON-RPC 2.0 (`poorijsonrpc.hpp`)](#json-rpc-20-poorijsonrpchpp)
+    - [Process Management (`pooriprocess.hpp`)](#process-management-pooriprocesshpp)
+    - [Async I/O (`asyncore.hpp` + `io_thread_pool.hpp`)](#async-io-asyncorehpp--io_thread_poolhpp)
+    - [MCP Layer (`poorimcp.hpp`)](#mcp-layer-poorimcphpp)
+  - [Requirements](#requirements)
+  - [Project Structure](#project-structure)
+  - [Building](#building)
+  - [Core Components](#core-components)
+  - [Usage](#usage)
+    - [Server: Registering Tools](#server-registering-tools)
+    - [Server: Starting](#server-starting)
+    - [Client: Connecting and Discovering Tools](#client-connecting-and-discovering-tools)
+    - [Client: Calling Tools](#client-calling-tools)
+    - [Transport: TCP](#transport-tcp)
+    - [Transport: STDIO](#transport-stdio)
+  - [Comparison with Other C++ MCP Implementations](#comparison-with-other-c-mcp-implementations)
+  - [Limitations and Gotchas](#limitations-and-gotchas)
+  - [License](#license)
+
+---
+
+## Why PooriMCP?
+
+Most MCP implementations are thin wrappers around existing JSON and HTTP libraries, bolted onto synchronous or callback-based I/O. PooriMCP is different — it is built **from the ground up** as a vertically integrated, coroutine-native C++23 stack:
+
+| Layer | Typical MCP Library | PooriMCP |
+|-------|-------------------|----------|
+| JSON | `nlohmann/json` (exception-based, heap-heavy) | `poorijson` — `std::expected`-based, transparent hashmap, zero-allocation lookups |
+| RPC | Manual `if/else` on JSON fields | `poorijsonrpc` — typed builders, `classify()`, `ErrorCode` enum |
+| Process | `popen()` or `boost::process` | `pooriprocess` — RAII, no zombies, noexcept `terminate()`, cross-platform |
+| Async I/O | `boost::asio` or callbacks | `pooriasync` — C++23 coroutines, epoll/kqueue/select reactor, `DetachedTask` |
+| MCP | Glue layer | `poorimcp` — `MCPServer`, `MCPClient`, `MCPTransport`, `ToolHandler` |
+
+**No `boost`. No `nlohmann`. No `asio`. No `libuv`. No exceptions for control flow.**
+
+---
+
+## Architecture
+
+```
+┌────────────────────────────────────────────────┐
+│                 poorimcp.hpp                   │
+│  ┌─────────────┐  ┌─────────────────────────┐  │
+│  │ MCPServer   │  │ MCPClient               │  │
+│  │ MCPTransport│  │   connect_async()       │  │
+│  │ ToolHandler │  │   initialize()          │  │
+│  └──────┬──────┘  │   call_tool_async()     │  │
+│         │         └────────────┬────────────┘  │
+│         │                      │               │
+├─────────┼──────────────────────┼───────────────┤
+│         ▼                      ▼               │
+│  ┌──────────────────────────────────────────┐  │
+│  │         io_thread_pool.hpp               │  │
+│  │   NetworkReactor (epoll/kqueue/select)   │  │
+│  │   AsyncSocket / AsyncPipe                │  │
+│  │   ThreadPool / DetachedTask              │  │
+│  └──────────┬──────────────────┬────────────┘  │
+│             │                  │               │
+│  ┌──────────▼─────┐  ┌────────▼─────────┐      │
+│  │  asyncore.hpp  │  │ pooriprocess.hpp │      │
+│  │  AsyncTask<T>  │  │ Process (RAII)   │      │
+│  │  AsyncGenerator│  │ close_stdin()    │      │
+│  │  FireAndForget │  │ noexcept term.   │      │
+│  │  sync_wait     │  └──────────────────┘      │
+│  └────────────────┘                            │
+│             │                                  │
+│  ┌──────────▼──────────────────────────────┐   │
+│  │          poorijson.hpp                  │   │
+│  │  JSON (std::variant, transparent hash)  │   │
+│  │  parse() / parse_lenient()              │   │
+│  │  ┌─────────────────────────────────┐    │   │
+│  │  │      poorijsonrpc.hpp           │    │   │
+│  │  │  make_request/response/error    │    │   │
+│  │  │  make_notification/batch        │    │   │
+│  │  │  classify() / MessageType       │    │   │
+│  │  └─────────────────────────────────┘    │   │
+│  └─────────────────────────────────────────┘   │
+└────────────────────────────────────────────────┘
+```
+
+---
+
+## Features
+
+### JSON Foundation (`poorijson.hpp`)
+- **`std::expected<T, JSONError>`** — exception-free error handling for all parse operations
+- **Transparent hash/eq** — `operator[]`, `at()`, `contains()`, `erase()` on objects use `std::string_view` without allocation
+- **`std::to_chars` / `std::from_chars`** — locale-independent, shortest round-trippable number formatting
+- **`parse_lenient()`** — repairs LLM-generated JSON (strips Markdown fences, closes unclosed containers via stack-based nesting)
+- **`at()` methods** — checked element access returning `std::expected<std::reference_wrapper<JSON>, JSONError>`
+- **Direct `std::string` serialization** — no `std::ostringstream` overhead
+
+### JSON-RPC 2.0 (`poorijsonrpc.hpp`)
+- **Spec-compliant builders** — `make_request()`, `make_response()`, `make_error()`, `make_notification()`, `make_batch()`
+- **`ErrorCode` enum** — reserved error codes (-32700 to -32603), no manual `static_cast`
+- **`classify()`** — structural classification of incoming messages (`REQUEST`, `NOTIFICATION`, `RESPONSE_SUCCESS`, `RESPONSE_ERROR`, `BATCH`, `INVALID`)
+- **Move-by-value optimization** — `params`, `result`, `data` taken by value and moved (no unnecessary copies)
+
+### Process Management (`pooriprocess.hpp`)
+- **RAII throughout** — `WindowsHandle` / `FileDescriptor` wrappers prevent leaks on every code path
+- **No zombies, no orphans** — destructor calls `terminate()` + `wait()` if child is still running
+- **Safe `running()`** — POSIX: reaps zombies and updates exit code (no `ECHILD` on subsequent `wait()`)
+- **Idempotent `wait()`** — returns cached exit code if already reaped
+- **Noexcept `terminate()`** — safe in destructors, signal handlers, cleanup paths
+- **`close_stdin()`** — signals EOF to child so programs like `cat` exit cleanly
+- **`initializer_list` convenience** — `p.start("cat", {"hello"})`
+
+### Async I/O (`asyncore.hpp` + `io_thread_pool.hpp`)
+- **C++23 coroutines** — `AsyncTask<T>`, `AsyncGenerator<T>`, `FireAndForget`, `DetachedTask`
+- **Symmetric transfer** — `FinalAwaitable` returns continuation handle for zero-overhead chaining
+- **Cross-platform reactor** — `epoll` (Linux), `kqueue` (Mac/BSD), `select` (Windows)
+- **`DetachedTask`** — starts suspended, auto-destroys frame on completion; no leaks, no UB
+- **`CancellationToken`** — thread-safe, one-way cancel flag with `throw_if_cancelled()`
+- **`MoveOnlyFunction`** — type-erased, move-only callable (no `std::function` overhead)
+- **`std::span` buffers** — zero-copy, bounds-safe I/O
+- **`std::expected` errors** — transport I/O returns `std::expected<T, std::error_code>`, never throws
+
+### MCP Layer (`poorimcp.hpp`)
+- **`MCPTransport`** — unified TCP (`AsyncSocket`) and STDIO (`AsyncPipe` + `Process`) transport
+- **`MCPServer`** — async accept loop, per-client `DetachedTask`, multi-request connection persistence
+- **`MCPClient`** — async connect, initialize, tool discovery, tool invocation
+- **`ToolHandler`** — move-only, type-erased handler for `AsyncTask<JSON>(const JSON&)` (replaces `std::function`)
+- **`SocketAwaitable`** — public awaitable for raw socket event registration
+- **Transparent tool map** — zero-allocation tool lookup by `std::string_view`
+- **`rpc::make_*` integration** — uses `poorijsonrpc` helpers for all JSON-RPC message construction
+- **`\r\n` handling** — trims trailing `CR` from newline-delimited JSON
+- **Graceful shutdown** — `CancellationToken` in server, `stop()` method
+
+---
+
+## Requirements
+
+- **C++23** (`std::expected`, `std::coroutine`, `std::move_only_function` (or equivalent), `std::span`, `std::binary_semaphore`)
+- Clang 16+ (macOS/Linux), MSVC 19.34+ (Windows)
+- No external dependencies
+
+## Project Structure
+
+```text
+poorimcp/
+├── bin/
+├── include/
+│   ├── asyncore.hpp
+│   ├── io_thread_pool.hpp
+│   ├── poorijson.hpp
+│   ├── poorijsonrpc.hpp
+│   ├── pooriprocess.hpp
+│   └── poorimcp.hpp
+├── src/
+│   └── main.cpp
+└── README.md
+```
+
+## Building
+
+**Mac/Linux:**
+```bash
+mkdir -p bin
+clang++ -std=c++23 -O3 -I include src/main.cpp -o bin/poorimcp_test
+./bin/poorimcp_test
+```
+
+**Windows (PowerShell, MSVC):**
+```powershell
+if (-not (Test-Path bin)) { New-Item -ItemType Directory bin }
+cl /std:c++23 /EHsc /I include src/main.cpp ws2_32.lib /out:bin\poorimcp_test.exe
+.\bin\poorimcp_test.exe
+```
+
+---
+
+## Core Components
+
+| Component | Header | Description |
+|-----------|--------|-------------|
+| `JSON` | `poorijson.hpp` | `std::variant`-backed JSON value with `std::expected` error handling |
+| `parse()` / `parse_lenient()` | `poorijson.hpp` | Strict RFC 8259 parser + LLM-tolerant repair |
+| `rpc::make_*` / `rpc::classify()` | `poorijsonrpc.hpp` | JSON-RPC 2.0 builders and message classifier |
+| `Process` | `pooriprocess.hpp` | RAII cross-platform process lifecycle |
+| `AsyncTask<T>` | `asyncore.hpp` | Lazy coroutine returning `T` |
+| `AsyncGenerator<T>` | `asyncore.hpp` | Lazy coroutine yielding multiple `T` |
+| `FireAndForget` | `asyncore.hpp` | Eager, self-managed coroutine |
+| `DetachedTask` | `io_thread_pool.hpp` | Lazy, auto-destroying coroutine for thread pools |
+| `NetworkReactor` | `io_thread_pool.hpp` | Per-thread event loop (epoll/kqueue/select) |
+| `AsyncSocket` | `io_thread_pool.hpp` | Non-blocking TCP with `co_await send/recv` |
+| `AsyncPipe` | `io_thread_pool.hpp` | Non-blocking IPC with `co_await send/recv` |
+| `ThreadPool` | `io_thread_pool.hpp` | Round-robin worker pool driving reactors |
+| `CancellationToken` | `asyncore.hpp` | Thread-safe cancel flag |
+| `MoveOnlyFunction` | `asyncore.hpp` | Type-erased move-only callable |
+| `MCPTransport` | `poorimcp.hpp` | Unified TCP/stdio transport |
+| `MCPServer` | `poorimcp.hpp` | Async MCP server with tool registration |
+| `MCPClient` | `poorimcp.hpp` | Async MCP client with tool discovery |
+| `ToolHandler` | `poorimcp.hpp` | Move-only type-erased tool handler |
+
+---
+
+## Usage
+
+### Server: Registering Tools
+
+```cpp
+MCPServer server{9876};
+
+server.register_tool(
+    MCPTool{"calculator", "Performs arithmetic", JSON({{"type", "object"}})},
+    [](const JSON& args) -> AsyncTask<JSON> {
+        double a = args["a"].get_number();
+        double b = args["b"].get_number();
+        std::string op = args["op"].get_string();
+
+        JSON result;
+        if (op == "add")       result["result"] = a + b;
+        else if (op == "subtract") result["result"] = a - b;
+        else
+            result["error"] = "unknown operation";
+
+        co_return result;
+    }
+);
+```
+
+### Server: Starting
+
+```cpp
+ThreadPool pool{4};
+pool.run(server.start()).wait();  // Blocks until server stops
+```
+
+Or start as a detached task:
+```cpp
+auto server_coro = [&server]() -> DetachedTask {
+    co_await server.start();
+    co_return;
+};
+auto dt = server_coro();
+auto h = dt.handle;
+dt.detach();
+pool.enqueue_raw([h]() { h.resume(); });
+```
+
+### Client: Connecting and Discovering Tools
+
+```cpp
+MCPClient client(MCPTransport::create_tcp("127.0.0.1", 9876));
+
+auto client_task = [&client]() -> AsyncTask<void> {
+    co_await client.connect_async();
+    co_await client.initialize();
+
+    for (const auto& tool : client.get_tools()) {
+        std::println("Discovered: {} — {}", tool.name, tool.description);
+    }
+};
+
+auto fut = pool.run(client_task());
+fut.get();
+```
+
+### Client: Calling Tools
+
+```cpp
+auto call_task = [&client]() -> AsyncTask<void> {
+    JSON args;
+    args["a"] = 10;
+    args["b"] = 32;
+    args["op"] = "add";
+
+    auto result = co_await client.call_tool_async("calculator", args);
+    if (result) {
+        std::println("Result: {}", *result);
+    }
+};
+
+auto fut = pool.run(call_task());
+fut.get();
+```
+
+### Transport: TCP
+
+```cpp
+auto transport = MCPTransport::create_tcp("192.168.1.100", 9000);
+MCPClient client(std::move(transport));
+```
+
+### Transport: STDIO
+
+```cpp
+auto transport = MCPTransport::create_stdio(
+    "/usr/local/bin/node",
+    {"/path/to/mcp-server.js", "--stdio"}
+);
+MCPClient client(std::move(transport));
+```
+
+---
+
+## Comparison with Other C++ MCP Implementations
+
+| Feature | PooriMCP | Typical C++ MCP Libs |
+|---------|----------|---------------------|
+| **Dependencies** | **Zero** — no boost, no nlohmann, no asio | Usually 2–5 deps (boost, nlohmann/json, asio, spdlog, etc.) |
+| **Async model** | **C++23 coroutines** — `co_await`, `AsyncTask<T>`, symmetric transfer | Callbacks, futures, or `boost::asio` handler chains |
+| **Error handling** | **`std::expected<T, JSONError>`** — no exceptions for control flow | `std::optional`, exceptions, or raw error codes |
+| **JSON** | **Custom** — transparent hashmap (zero-alloc lookups), `std::to_chars`, `parse_lenient()` | `nlohmann/json` — heap allocations, exception-based |
+| **JSON-RPC** | **Typed builders** — `make_request()`, `classify()`, `ErrorCode` enum | Manual `json["method"] = ...` stringly-typed |
+| **Process management** | **RAII** — no zombies, noexcept `terminate()`, idempotent `wait()` | `popen()` (leaks, no stderr), or `boost::process` (heavy dep) |
+| **Reactor** | **epoll/kqueue/select** — hand-written, ~500 LOC | `boost::asio` (powerful but ~500KB binary bloat) |
+| **Coroutine lifetime** | **`DetachedTask`** — auto-destroy on completion, no leaks | Manual `handle.destroy()` or `std::suspend_always` + leaks |
+| **Cancellation** | **`CancellationToken`** — thread-safe, `throw_if_cancelled()` | None, or ad-hoc `std::atomic<bool>` |
+| **Type-erased handlers** | **`ToolHandler`** — move-only, type-safe | `std::function` (requires copyable, heap-allocates) |
+| **Object lookups** | **Transparent hash/eq** — `std::string_view` lookup, zero allocation | `std::string` key allocation on every `obj["key"]` |
+| **Buffer safety** | **`std::span<std::byte>`** — bounds-safe, zero-copy | Raw `char*` + size, or `std::vector` copies |
+| **Header-only** | **Yes** — drop into `include/` and build | Usually compiled library + headers |
+| **Binary size** | **Minimal** — only OS networking code linked | Large (boost, asio, nlohmann templates) |
+| **Compile time** | **Fast** — no heavy template instantiations | Slow (boost/asio/nlohmann template explosion) |
+| **Cross-platform** | **Mac/Linux/Windows** — unified API, `NOMINMAX`, `WIN32_LEAN_AND_MEAN` | Often POSIX-only or Windows-only |
+| **LLM integration** | **`parse_lenient()`** — repairs unclosed containers, strips Markdown | Requires perfect JSON from the model |
+| **Connection persistence** | **Multi-request loop** — one connection, many requests | Often one-request-per-connection |
+| **Line framing** | **`\r\n` aware** — trims trailing `CR` | Usually assumes `\n` only |
+| **Server shutdown** | **`CancellationToken` + `stop()`** — clean, non-blocking | Often `kill` or `SIGTERM` + zombie |
+| **Code conventions** | **Allman, single-return, smart pointers, no globals** | Mixed style, raw pointers, multiple returns |
+
+---
+
+## Limitations and Gotchas
+
+1. **Windows `select` limit:** The reactor uses `select()` on Windows, limited to `FD_SETSIZE` (1024) concurrent sockets. For high-scale Windows deployments, IOCP support would be needed.
+2. **Windows IPC latency:** `AsyncPipe` on Windows uses `PeekNamedPipe` polling (100ms timeout). For high-performance Windows IPC, IOCP is required.
+3. **No streaming/SAX JSON:** The whole document must be in memory. For very large JSON payloads, a streaming parser would be needed.
+4. **`sync_wait` deadlocks:** Calling `sync_wait` inside a reactor thread blocks that thread. Use `ThreadPool::run()` instead.
+5. **`std::move_only_function` availability:** If your standard library doesn't have it, `poorimcp.hpp` provides a `ToolHandler` class with the same semantics.
+6. **No TLS/SSL:** TCP transport is plaintext. For production MCP over network, add TLS (OpenSSL or platform APIs).
+7. **Single server per port:** The server binds one port. For multi-port or multi-transport servers, use multiple `MCPServer` instances on separate threads.
+8. **Coroutine frame heap allocation:** Each `co_await` creates a coroutine frame on the heap. For ultra-low-latency scenarios, a pooled allocator could be added.
+9. **Object key order is unspecified:** `std::unordered_map` does not preserve insertion order. If key order matters for protocol compliance, switch to `std::map` or `nlohmann::ordered_json`.
+10. **`ToolHandler` always heap-allocates:** No small-buffer-optimization. For high-frequency tool dispatch, consider a pooled allocator.
+
+---
+
+## License
+
+Apache License 2.0 — see the headers of each `.hpp` file.
+
+---
+
+**Author:** Pooria Yousefi
+
+---

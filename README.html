@@ -1,0 +1,696 @@
+<!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <title>PooriMCP</title>
+            <style>
+/* From extension vscode.github */
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+.vscode-dark img[src$=\#gh-light-mode-only],
+.vscode-light img[src$=\#gh-dark-mode-only],
+.vscode-high-contrast:not(.vscode-high-contrast-light) img[src$=\#gh-light-mode-only],
+.vscode-high-contrast-light img[src$=\#gh-dark-mode-only] {
+	display: none;
+}
+
+</style>
+            
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/Microsoft/vscode/extensions/markdown-language-features/media/markdown.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/Microsoft/vscode/extensions/markdown-language-features/media/highlight.css">
+<style>
+            body {
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe WPC', 'Segoe UI', system-ui, 'Ubuntu', 'Droid Sans', sans-serif;
+                font-size: 14px;
+                line-height: 1.6;
+            }
+        </style>
+        <style>
+.task-list-item {
+    list-style-type: none;
+}
+
+.task-list-item-checkbox {
+    margin-left: -20px;
+    vertical-align: middle;
+    pointer-events: none;
+}
+</style>
+<style>
+:root {
+  --color-note: #0969da;
+  --color-tip: #1a7f37;
+  --color-warning: #9a6700;
+  --color-severe: #bc4c00;
+  --color-caution: #d1242f;
+  --color-important: #8250df;
+}
+
+</style>
+<style>
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-note: #2f81f7;
+    --color-tip: #3fb950;
+    --color-warning: #d29922;
+    --color-severe: #db6d28;
+    --color-caution: #f85149;
+    --color-important: #a371f7;
+  }
+}
+
+</style>
+<style>
+.markdown-alert {
+  padding: 0.5rem 1rem;
+  margin-bottom: 16px;
+  color: inherit;
+  border-left: .25em solid #888;
+}
+
+.markdown-alert>:first-child {
+  margin-top: 0
+}
+
+.markdown-alert>:last-child {
+  margin-bottom: 0
+}
+
+.markdown-alert .markdown-alert-title {
+  display: flex;
+  font-weight: 500;
+  align-items: center;
+  line-height: 1
+}
+
+.markdown-alert .markdown-alert-title .octicon {
+  margin-right: 0.5rem;
+  display: inline-block;
+  overflow: visible !important;
+  vertical-align: text-bottom;
+  fill: currentColor;
+}
+
+.markdown-alert.markdown-alert-note {
+  border-left-color: var(--color-note);
+}
+
+.markdown-alert.markdown-alert-note .markdown-alert-title {
+  color: var(--color-note);
+}
+
+.markdown-alert.markdown-alert-important {
+  border-left-color: var(--color-important);
+}
+
+.markdown-alert.markdown-alert-important .markdown-alert-title {
+  color: var(--color-important);
+}
+
+.markdown-alert.markdown-alert-warning {
+  border-left-color: var(--color-warning);
+}
+
+.markdown-alert.markdown-alert-warning .markdown-alert-title {
+  color: var(--color-warning);
+}
+
+.markdown-alert.markdown-alert-tip {
+  border-left-color: var(--color-tip);
+}
+
+.markdown-alert.markdown-alert-tip .markdown-alert-title {
+  color: var(--color-tip);
+}
+
+.markdown-alert.markdown-alert-caution {
+  border-left-color: var(--color-caution);
+}
+
+.markdown-alert.markdown-alert-caution .markdown-alert-title {
+  color: var(--color-caution);
+}
+
+</style>
+        
+        </head>
+        <body class="vscode-body vscode-light">
+            <span id="markdown-mermaid" aria-hidden="true" data-config="{&quot;darkModeTheme&quot;:&quot;vscode&quot;,&quot;lightModeTheme&quot;:&quot;vscode&quot;,&quot;maxTextSize&quot;:50000,&quot;clickDrag&quot;:&quot;alt&quot;,&quot;showControls&quot;:&quot;onHoverOrFocus&quot;,&quot;resizable&quot;:true,&quot;maxHeight&quot;:&quot;&quot;}"></span>
+				<h1 id="poorimcp">PooriMCP</h1>
+<p>A production-grade, fully asynchronous C++23 implementation of the Model Context Protocol (MCP). It combines a zero-dependency JSON library, a JSON-RPC 2.0 framework, a cross-platform process manager, and a coroutine-based async I/O reactor into a single, cohesive library — all built from first principles without any external dependencies.</p>
+<pre><code class="language-cpp"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&quot;poorimcp.hpp&quot;</span></span>
+
+<span class="hljs-keyword">using</span> <span class="hljs-keyword">namespace</span> pooriayousefi::mcp;
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    ThreadPool pool{<span class="hljs-number">4</span>};
+
+    <span class="hljs-comment">// --- Server side ---</span>
+    MCPServer server{<span class="hljs-number">9876</span>};
+    server.<span class="hljs-built_in">register_tool</span>(
+        MCPTool{<span class="hljs-string">&quot;echo&quot;</span>, <span class="hljs-string">&quot;Echoes back input&quot;</span>, <span class="hljs-built_in">JSON</span>(<span class="hljs-literal">nullptr</span>)},
+        [](<span class="hljs-type">const</span> JSON&amp; args) -&gt; AsyncTask&lt;JSON&gt; {
+            <span class="hljs-keyword">co_return</span> args;
+        }
+    );
+    pool.<span class="hljs-built_in">run</span>(server.<span class="hljs-built_in">start</span>()).<span class="hljs-built_in">wait</span>();
+
+    <span class="hljs-comment">// --- Client side ---</span>
+    <span class="hljs-function">MCPClient <span class="hljs-title">client</span><span class="hljs-params">(MCPTransport::create_tcp(<span class="hljs-string">&quot;127.0.0.1&quot;</span>, <span class="hljs-number">9876</span>))</span></span>;
+    <span class="hljs-keyword">auto</span> fut = pool.<span class="hljs-built_in">run</span>([&amp;]() -&gt; AsyncTask&lt;<span class="hljs-type">void</span>&gt; {
+        <span class="hljs-keyword">co_await</span> client.<span class="hljs-built_in">connect_async</span>();
+        <span class="hljs-keyword">co_await</span> client.<span class="hljs-built_in">initialize</span>();
+        <span class="hljs-keyword">auto</span> result = <span class="hljs-keyword">co_await</span> client.<span class="hljs-built_in">call_tool_async</span>(<span class="hljs-string">&quot;echo&quot;</span>, JSON{{<span class="hljs-string">&quot;msg&quot;</span>,<span class="hljs-string">&quot;hi&quot;</span>}});
+        std::<span class="hljs-built_in">println</span>(<span class="hljs-string">&quot;Result: {}&quot;</span>, *result);
+    });
+    fut.<span class="hljs-built_in">get</span>();
+}
+</code></pre>
+<hr>
+<h2 id="table-of-contents">Table of contents</h2>
+<ul>
+<li><a href="#poorimcp">PooriMCP</a>
+<ul>
+<li><a href="#table-of-contents">Table of contents</a></li>
+<li><a href="#why-poorimcp">Why PooriMCP?</a></li>
+<li><a href="#architecture">Architecture</a></li>
+<li><a href="#features">Features</a>
+<ul>
+<li><a href="#json-foundation-poorijsonhpp">JSON Foundation (<code>poorijson.hpp</code>)</a></li>
+<li><a href="#json-rpc-20-poorijsonrpchpp">JSON-RPC 2.0 (<code>poorijsonrpc.hpp</code>)</a></li>
+<li><a href="#process-management-pooriprocesshpp">Process Management (<code>pooriprocess.hpp</code>)</a></li>
+<li><a href="#async-io-asyncorehpp--io_thread_poolhpp">Async I/O (<code>asyncore.hpp</code> + <code>io_thread_pool.hpp</code>)</a></li>
+<li><a href="#mcp-layer-poorimcphpp">MCP Layer (<code>poorimcp.hpp</code>)</a></li>
+</ul>
+</li>
+<li><a href="#requirements">Requirements</a></li>
+<li><a href="#project-structure">Project Structure</a></li>
+<li><a href="#building">Building</a></li>
+<li><a href="#core-components">Core Components</a></li>
+<li><a href="#usage">Usage</a>
+<ul>
+<li><a href="#server-registering-tools">Server: Registering Tools</a></li>
+<li><a href="#server-starting">Server: Starting</a></li>
+<li><a href="#client-connecting-and-discovering-tools">Client: Connecting and Discovering Tools</a></li>
+<li><a href="#client-calling-tools">Client: Calling Tools</a></li>
+<li><a href="#transport-tcp">Transport: TCP</a></li>
+<li><a href="#transport-stdio">Transport: STDIO</a></li>
+</ul>
+</li>
+<li><a href="#comparison-with-other-c-mcp-implementations">Comparison with Other C++ MCP Implementations</a></li>
+<li><a href="#limitations-and-gotchas">Limitations and Gotchas</a></li>
+<li><a href="#license">License</a></li>
+</ul>
+</li>
+</ul>
+<hr>
+<h2 id="why-poorimcp">Why PooriMCP?</h2>
+<p>Most MCP implementations are thin wrappers around existing JSON and HTTP libraries, bolted onto synchronous or callback-based I/O. PooriMCP is different — it is built <strong>from the ground up</strong> as a vertically integrated, coroutine-native C++23 stack:</p>
+<table>
+<thead>
+<tr>
+<th>Layer</th>
+<th>Typical MCP Library</th>
+<th>PooriMCP</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>JSON</td>
+<td><code>nlohmann/json</code> (exception-based, heap-heavy)</td>
+<td><code>poorijson</code> — <code>std::expected</code>-based, transparent hashmap, zero-allocation lookups</td>
+</tr>
+<tr>
+<td>RPC</td>
+<td>Manual <code>if/else</code> on JSON fields</td>
+<td><code>poorijsonrpc</code> — typed builders, <code>classify()</code>, <code>ErrorCode</code> enum</td>
+</tr>
+<tr>
+<td>Process</td>
+<td><code>popen()</code> or <code>boost::process</code></td>
+<td><code>pooriprocess</code> — RAII, no zombies, noexcept <code>terminate()</code>, cross-platform</td>
+</tr>
+<tr>
+<td>Async I/O</td>
+<td><code>boost::asio</code> or callbacks</td>
+<td><code>pooriasync</code> — C++23 coroutines, epoll/kqueue/select reactor, <code>DetachedTask</code></td>
+</tr>
+<tr>
+<td>MCP</td>
+<td>Glue layer</td>
+<td><code>poorimcp</code> — <code>MCPServer</code>, <code>MCPClient</code>, <code>MCPTransport</code>, <code>ToolHandler</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>No <code>boost</code>. No <code>nlohmann</code>. No <code>asio</code>. No <code>libuv</code>. No exceptions for control flow.</strong></p>
+<hr>
+<h2 id="architecture">Architecture</h2>
+<pre><code>┌────────────────────────────────────────────────┐
+│                 poorimcp.hpp                   │
+│  ┌─────────────┐  ┌─────────────────────────┐  │
+│  │ MCPServer   │  │ MCPClient               │  │
+│  │ MCPTransport│  │   connect_async()       │  │
+│  │ ToolHandler │  │   initialize()          │  │
+│  └──────┬──────┘  │   call_tool_async()     │  │
+│         │         └────────────┬────────────┘  │
+│         │                      │               │
+├─────────┼──────────────────────┼───────────────┤
+│         ▼                      ▼               │
+│  ┌──────────────────────────────────────────┐  │
+│  │         io_thread_pool.hpp               │  │
+│  │   NetworkReactor (epoll/kqueue/select)   │  │
+│  │   AsyncSocket / AsyncPipe                │  │
+│  │   ThreadPool / DetachedTask              │  │
+│  └──────────┬──────────────────┬────────────┘  │
+│             │                  │               │
+│  ┌──────────▼─────┐  ┌────────▼─────────┐      │
+│  │  asyncore.hpp  │  │ pooriprocess.hpp │      │
+│  │  AsyncTask&lt;T&gt;  │  │ Process (RAII)   │      │
+│  │  AsyncGenerator│  │ close_stdin()    │      │
+│  │  FireAndForget │  │ noexcept term.   │      │
+│  │  sync_wait     │  └──────────────────┘      │
+│  └────────────────┘                            │
+│             │                                  │
+│  ┌──────────▼──────────────────────────────┐   │
+│  │          poorijson.hpp                  │   │
+│  │  JSON (std::variant, transparent hash)  │   │
+│  │  parse() / parse_lenient()              │   │
+│  │  ┌─────────────────────────────────┐    │   │
+│  │  │      poorijsonrpc.hpp           │    │   │
+│  │  │  make_request/response/error    │    │   │
+│  │  │  make_notification/batch        │    │   │
+│  │  │  classify() / MessageType       │    │   │
+│  │  └─────────────────────────────────┘    │   │
+│  └─────────────────────────────────────────┘   │
+└────────────────────────────────────────────────┘
+</code></pre>
+<hr>
+<h2 id="features">Features</h2>
+<h3 id="json-foundation-poorijsonhpp">JSON Foundation (<code>poorijson.hpp</code>)</h3>
+<ul>
+<li><strong><code>std::expected&lt;T, JSONError&gt;</code></strong> — exception-free error handling for all parse operations</li>
+<li><strong>Transparent hash/eq</strong> — <code>operator[]</code>, <code>at()</code>, <code>contains()</code>, <code>erase()</code> on objects use <code>std::string_view</code> without allocation</li>
+<li><strong><code>std::to_chars</code> / <code>std::from_chars</code></strong> — locale-independent, shortest round-trippable number formatting</li>
+<li><strong><code>parse_lenient()</code></strong> — repairs LLM-generated JSON (strips Markdown fences, closes unclosed containers via stack-based nesting)</li>
+<li><strong><code>at()</code> methods</strong> — checked element access returning <code>std::expected&lt;std::reference_wrapper&lt;JSON&gt;, JSONError&gt;</code></li>
+<li><strong>Direct <code>std::string</code> serialization</strong> — no <code>std::ostringstream</code> overhead</li>
+</ul>
+<h3 id="json-rpc-20-poorijsonrpchpp">JSON-RPC 2.0 (<code>poorijsonrpc.hpp</code>)</h3>
+<ul>
+<li><strong>Spec-compliant builders</strong> — <code>make_request()</code>, <code>make_response()</code>, <code>make_error()</code>, <code>make_notification()</code>, <code>make_batch()</code></li>
+<li><strong><code>ErrorCode</code> enum</strong> — reserved error codes (-32700 to -32603), no manual <code>static_cast</code></li>
+<li><strong><code>classify()</code></strong> — structural classification of incoming messages (<code>REQUEST</code>, <code>NOTIFICATION</code>, <code>RESPONSE_SUCCESS</code>, <code>RESPONSE_ERROR</code>, <code>BATCH</code>, <code>INVALID</code>)</li>
+<li><strong>Move-by-value optimization</strong> — <code>params</code>, <code>result</code>, <code>data</code> taken by value and moved (no unnecessary copies)</li>
+</ul>
+<h3 id="process-management-pooriprocesshpp">Process Management (<code>pooriprocess.hpp</code>)</h3>
+<ul>
+<li><strong>RAII throughout</strong> — <code>WindowsHandle</code> / <code>FileDescriptor</code> wrappers prevent leaks on every code path</li>
+<li><strong>No zombies, no orphans</strong> — destructor calls <code>terminate()</code> + <code>wait()</code> if child is still running</li>
+<li><strong>Safe <code>running()</code></strong> — POSIX: reaps zombies and updates exit code (no <code>ECHILD</code> on subsequent <code>wait()</code>)</li>
+<li><strong>Idempotent <code>wait()</code></strong> — returns cached exit code if already reaped</li>
+<li><strong>Noexcept <code>terminate()</code></strong> — safe in destructors, signal handlers, cleanup paths</li>
+<li><strong><code>close_stdin()</code></strong> — signals EOF to child so programs like <code>cat</code> exit cleanly</li>
+<li><strong><code>initializer_list</code> convenience</strong> — <code>p.start(&quot;cat&quot;, {&quot;hello&quot;})</code></li>
+</ul>
+<h3 id="async-io-asyncorehpp--io_thread_poolhpp">Async I/O (<code>asyncore.hpp</code> + <code>io_thread_pool.hpp</code>)</h3>
+<ul>
+<li><strong>C++23 coroutines</strong> — <code>AsyncTask&lt;T&gt;</code>, <code>AsyncGenerator&lt;T&gt;</code>, <code>FireAndForget</code>, <code>DetachedTask</code></li>
+<li><strong>Symmetric transfer</strong> — <code>FinalAwaitable</code> returns continuation handle for zero-overhead chaining</li>
+<li><strong>Cross-platform reactor</strong> — <code>epoll</code> (Linux), <code>kqueue</code> (Mac/BSD), <code>select</code> (Windows)</li>
+<li><strong><code>DetachedTask</code></strong> — starts suspended, auto-destroys frame on completion; no leaks, no UB</li>
+<li><strong><code>CancellationToken</code></strong> — thread-safe, one-way cancel flag with <code>throw_if_cancelled()</code></li>
+<li><strong><code>MoveOnlyFunction</code></strong> — type-erased, move-only callable (no <code>std::function</code> overhead)</li>
+<li><strong><code>std::span</code> buffers</strong> — zero-copy, bounds-safe I/O</li>
+<li><strong><code>std::expected</code> errors</strong> — transport I/O returns <code>std::expected&lt;T, std::error_code&gt;</code>, never throws</li>
+</ul>
+<h3 id="mcp-layer-poorimcphpp">MCP Layer (<code>poorimcp.hpp</code>)</h3>
+<ul>
+<li><strong><code>MCPTransport</code></strong> — unified TCP (<code>AsyncSocket</code>) and STDIO (<code>AsyncPipe</code> + <code>Process</code>) transport</li>
+<li><strong><code>MCPServer</code></strong> — async accept loop, per-client <code>DetachedTask</code>, multi-request connection persistence</li>
+<li><strong><code>MCPClient</code></strong> — async connect, initialize, tool discovery, tool invocation</li>
+<li><strong><code>ToolHandler</code></strong> — move-only, type-erased handler for <code>AsyncTask&lt;JSON&gt;(const JSON&amp;)</code> (replaces <code>std::function</code>)</li>
+<li><strong><code>SocketAwaitable</code></strong> — public awaitable for raw socket event registration</li>
+<li><strong>Transparent tool map</strong> — zero-allocation tool lookup by <code>std::string_view</code></li>
+<li><strong><code>rpc::make_*</code> integration</strong> — uses <code>poorijsonrpc</code> helpers for all JSON-RPC message construction</li>
+<li><strong><code>\r\n</code> handling</strong> — trims trailing <code>CR</code> from newline-delimited JSON</li>
+<li><strong>Graceful shutdown</strong> — <code>CancellationToken</code> in server, <code>stop()</code> method</li>
+</ul>
+<hr>
+<h2 id="requirements">Requirements</h2>
+<ul>
+<li><strong>C++23</strong> (<code>std::expected</code>, <code>std::coroutine</code>, <code>std::move_only_function</code> (or equivalent), <code>std::span</code>, <code>std::binary_semaphore</code>)</li>
+<li>Clang 16+ (macOS/Linux), MSVC 19.34+ (Windows)</li>
+<li>No external dependencies</li>
+</ul>
+<h2 id="project-structure">Project Structure</h2>
+<pre><code class="language-text">poorimcp/
+├── bin/
+├── include/
+│   ├── asyncore.hpp
+│   ├── io_thread_pool.hpp
+│   ├── poorijson.hpp
+│   ├── poorijsonrpc.hpp
+│   ├── pooriprocess.hpp
+│   └── poorimcp.hpp
+├── src/
+│   └── main.cpp
+└── README.md
+</code></pre>
+<h2 id="building">Building</h2>
+<p><strong>Mac/Linux:</strong></p>
+<pre><code class="language-bash"><span class="hljs-built_in">mkdir</span> -p bin
+clang++ -std=c++23 -O3 -I include src/main.cpp -o bin/poorimcp_test
+./bin/poorimcp_test
+</code></pre>
+<p><strong>Windows (PowerShell, MSVC):</strong></p>
+<pre><code class="language-powershell"><span class="hljs-keyword">if</span> (<span class="hljs-operator">-not</span> (<span class="hljs-built_in">Test-Path</span> bin)) { <span class="hljs-built_in">New-Item</span> <span class="hljs-literal">-ItemType</span> Directory bin }
+cl /std:c++<span class="hljs-number">23</span> /EHsc /I include src/main.cpp ws2_32.lib /out:bin\poorimcp_test.exe
+.\bin\poorimcp_test.exe
+</code></pre>
+<hr>
+<h2 id="core-components">Core Components</h2>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Header</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>JSON</code></td>
+<td><code>poorijson.hpp</code></td>
+<td><code>std::variant</code>-backed JSON value with <code>std::expected</code> error handling</td>
+</tr>
+<tr>
+<td><code>parse()</code> / <code>parse_lenient()</code></td>
+<td><code>poorijson.hpp</code></td>
+<td>Strict RFC 8259 parser + LLM-tolerant repair</td>
+</tr>
+<tr>
+<td><code>rpc::make_*</code> / <code>rpc::classify()</code></td>
+<td><code>poorijsonrpc.hpp</code></td>
+<td>JSON-RPC 2.0 builders and message classifier</td>
+</tr>
+<tr>
+<td><code>Process</code></td>
+<td><code>pooriprocess.hpp</code></td>
+<td>RAII cross-platform process lifecycle</td>
+</tr>
+<tr>
+<td><code>AsyncTask&lt;T&gt;</code></td>
+<td><code>asyncore.hpp</code></td>
+<td>Lazy coroutine returning <code>T</code></td>
+</tr>
+<tr>
+<td><code>AsyncGenerator&lt;T&gt;</code></td>
+<td><code>asyncore.hpp</code></td>
+<td>Lazy coroutine yielding multiple <code>T</code></td>
+</tr>
+<tr>
+<td><code>FireAndForget</code></td>
+<td><code>asyncore.hpp</code></td>
+<td>Eager, self-managed coroutine</td>
+</tr>
+<tr>
+<td><code>DetachedTask</code></td>
+<td><code>io_thread_pool.hpp</code></td>
+<td>Lazy, auto-destroying coroutine for thread pools</td>
+</tr>
+<tr>
+<td><code>NetworkReactor</code></td>
+<td><code>io_thread_pool.hpp</code></td>
+<td>Per-thread event loop (epoll/kqueue/select)</td>
+</tr>
+<tr>
+<td><code>AsyncSocket</code></td>
+<td><code>io_thread_pool.hpp</code></td>
+<td>Non-blocking TCP with <code>co_await send/recv</code></td>
+</tr>
+<tr>
+<td><code>AsyncPipe</code></td>
+<td><code>io_thread_pool.hpp</code></td>
+<td>Non-blocking IPC with <code>co_await send/recv</code></td>
+</tr>
+<tr>
+<td><code>ThreadPool</code></td>
+<td><code>io_thread_pool.hpp</code></td>
+<td>Round-robin worker pool driving reactors</td>
+</tr>
+<tr>
+<td><code>CancellationToken</code></td>
+<td><code>asyncore.hpp</code></td>
+<td>Thread-safe cancel flag</td>
+</tr>
+<tr>
+<td><code>MoveOnlyFunction</code></td>
+<td><code>asyncore.hpp</code></td>
+<td>Type-erased move-only callable</td>
+</tr>
+<tr>
+<td><code>MCPTransport</code></td>
+<td><code>poorimcp.hpp</code></td>
+<td>Unified TCP/stdio transport</td>
+</tr>
+<tr>
+<td><code>MCPServer</code></td>
+<td><code>poorimcp.hpp</code></td>
+<td>Async MCP server with tool registration</td>
+</tr>
+<tr>
+<td><code>MCPClient</code></td>
+<td><code>poorimcp.hpp</code></td>
+<td>Async MCP client with tool discovery</td>
+</tr>
+<tr>
+<td><code>ToolHandler</code></td>
+<td><code>poorimcp.hpp</code></td>
+<td>Move-only type-erased tool handler</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="usage">Usage</h2>
+<h3 id="server-registering-tools">Server: Registering Tools</h3>
+<pre><code class="language-cpp">MCPServer server{<span class="hljs-number">9876</span>};
+
+server.<span class="hljs-built_in">register_tool</span>(
+    MCPTool{<span class="hljs-string">&quot;calculator&quot;</span>, <span class="hljs-string">&quot;Performs arithmetic&quot;</span>, <span class="hljs-built_in">JSON</span>({{<span class="hljs-string">&quot;type&quot;</span>, <span class="hljs-string">&quot;object&quot;</span>}})},
+    [](<span class="hljs-type">const</span> JSON&amp; args) -&gt; AsyncTask&lt;JSON&gt; {
+        <span class="hljs-type">double</span> a = args[<span class="hljs-string">&quot;a&quot;</span>].<span class="hljs-built_in">get_number</span>();
+        <span class="hljs-type">double</span> b = args[<span class="hljs-string">&quot;b&quot;</span>].<span class="hljs-built_in">get_number</span>();
+        std::string op = args[<span class="hljs-string">&quot;op&quot;</span>].<span class="hljs-built_in">get_string</span>();
+
+        JSON result;
+        <span class="hljs-keyword">if</span> (op == <span class="hljs-string">&quot;add&quot;</span>)       result[<span class="hljs-string">&quot;result&quot;</span>] = a + b;
+        <span class="hljs-keyword">else</span> <span class="hljs-keyword">if</span> (op == <span class="hljs-string">&quot;subtract&quot;</span>) result[<span class="hljs-string">&quot;result&quot;</span>] = a - b;
+        <span class="hljs-keyword">else</span>
+            result[<span class="hljs-string">&quot;error&quot;</span>] = <span class="hljs-string">&quot;unknown operation&quot;</span>;
+
+        <span class="hljs-keyword">co_return</span> result;
+    }
+);
+</code></pre>
+<h3 id="server-starting">Server: Starting</h3>
+<pre><code class="language-cpp">ThreadPool pool{<span class="hljs-number">4</span>};
+pool.<span class="hljs-built_in">run</span>(server.<span class="hljs-built_in">start</span>()).<span class="hljs-built_in">wait</span>();  <span class="hljs-comment">// Blocks until server stops</span>
+</code></pre>
+<p>Or start as a detached task:</p>
+<pre><code class="language-cpp"><span class="hljs-keyword">auto</span> server_coro = [&amp;server]() -&gt; DetachedTask {
+    <span class="hljs-keyword">co_await</span> server.<span class="hljs-built_in">start</span>();
+    <span class="hljs-keyword">co_return</span>;
+};
+<span class="hljs-keyword">auto</span> dt = <span class="hljs-built_in">server_coro</span>();
+<span class="hljs-keyword">auto</span> h = dt.handle;
+dt.<span class="hljs-built_in">detach</span>();
+pool.<span class="hljs-built_in">enqueue_raw</span>([h]() { h.<span class="hljs-built_in">resume</span>(); });
+</code></pre>
+<h3 id="client-connecting-and-discovering-tools">Client: Connecting and Discovering Tools</h3>
+<pre><code class="language-cpp"><span class="hljs-function">MCPClient <span class="hljs-title">client</span><span class="hljs-params">(MCPTransport::create_tcp(<span class="hljs-string">&quot;127.0.0.1&quot;</span>, <span class="hljs-number">9876</span>))</span></span>;
+
+<span class="hljs-keyword">auto</span> client_task = [&amp;client]() -&gt; AsyncTask&lt;<span class="hljs-type">void</span>&gt; {
+    <span class="hljs-keyword">co_await</span> client.<span class="hljs-built_in">connect_async</span>();
+    <span class="hljs-keyword">co_await</span> client.<span class="hljs-built_in">initialize</span>();
+
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">const</span> <span class="hljs-keyword">auto</span>&amp; tool : client.<span class="hljs-built_in">get_tools</span>()) {
+        std::<span class="hljs-built_in">println</span>(<span class="hljs-string">&quot;Discovered: {} — {}&quot;</span>, tool.name, tool.description);
+    }
+};
+
+<span class="hljs-keyword">auto</span> fut = pool.<span class="hljs-built_in">run</span>(<span class="hljs-built_in">client_task</span>());
+fut.<span class="hljs-built_in">get</span>();
+</code></pre>
+<h3 id="client-calling-tools">Client: Calling Tools</h3>
+<pre><code class="language-cpp"><span class="hljs-keyword">auto</span> call_task = [&amp;client]() -&gt; AsyncTask&lt;<span class="hljs-type">void</span>&gt; {
+    JSON args;
+    args[<span class="hljs-string">&quot;a&quot;</span>] = <span class="hljs-number">10</span>;
+    args[<span class="hljs-string">&quot;b&quot;</span>] = <span class="hljs-number">32</span>;
+    args[<span class="hljs-string">&quot;op&quot;</span>] = <span class="hljs-string">&quot;add&quot;</span>;
+
+    <span class="hljs-keyword">auto</span> result = <span class="hljs-keyword">co_await</span> client.<span class="hljs-built_in">call_tool_async</span>(<span class="hljs-string">&quot;calculator&quot;</span>, args);
+    <span class="hljs-keyword">if</span> (result) {
+        std::<span class="hljs-built_in">println</span>(<span class="hljs-string">&quot;Result: {}&quot;</span>, *result);
+    }
+};
+
+<span class="hljs-keyword">auto</span> fut = pool.<span class="hljs-built_in">run</span>(<span class="hljs-built_in">call_task</span>());
+fut.<span class="hljs-built_in">get</span>();
+</code></pre>
+<h3 id="transport-tcp">Transport: TCP</h3>
+<pre><code class="language-cpp"><span class="hljs-keyword">auto</span> transport = MCPTransport::<span class="hljs-built_in">create_tcp</span>(<span class="hljs-string">&quot;192.168.1.100&quot;</span>, <span class="hljs-number">9000</span>);
+<span class="hljs-function">MCPClient <span class="hljs-title">client</span><span class="hljs-params">(std::move(transport))</span></span>;
+</code></pre>
+<h3 id="transport-stdio">Transport: STDIO</h3>
+<pre><code class="language-cpp"><span class="hljs-keyword">auto</span> transport = MCPTransport::<span class="hljs-built_in">create_stdio</span>(
+    <span class="hljs-string">&quot;/usr/local/bin/node&quot;</span>,
+    {<span class="hljs-string">&quot;/path/to/mcp-server.js&quot;</span>, <span class="hljs-string">&quot;--stdio&quot;</span>}
+);
+<span class="hljs-function">MCPClient <span class="hljs-title">client</span><span class="hljs-params">(std::move(transport))</span></span>;
+</code></pre>
+<hr>
+<h2 id="comparison-with-other-c-mcp-implementations">Comparison with Other C++ MCP Implementations</h2>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>PooriMCP</th>
+<th>Typical C++ MCP Libs</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Dependencies</strong></td>
+<td><strong>Zero</strong> — no boost, no nlohmann, no asio</td>
+<td>Usually 2–5 deps (boost, nlohmann/json, asio, spdlog, etc.)</td>
+</tr>
+<tr>
+<td><strong>Async model</strong></td>
+<td><strong>C++23 coroutines</strong> — <code>co_await</code>, <code>AsyncTask&lt;T&gt;</code>, symmetric transfer</td>
+<td>Callbacks, futures, or <code>boost::asio</code> handler chains</td>
+</tr>
+<tr>
+<td><strong>Error handling</strong></td>
+<td><strong><code>std::expected&lt;T, JSONError&gt;</code></strong> — no exceptions for control flow</td>
+<td><code>std::optional</code>, exceptions, or raw error codes</td>
+</tr>
+<tr>
+<td><strong>JSON</strong></td>
+<td><strong>Custom</strong> — transparent hashmap (zero-alloc lookups), <code>std::to_chars</code>, <code>parse_lenient()</code></td>
+<td><code>nlohmann/json</code> — heap allocations, exception-based</td>
+</tr>
+<tr>
+<td><strong>JSON-RPC</strong></td>
+<td><strong>Typed builders</strong> — <code>make_request()</code>, <code>classify()</code>, <code>ErrorCode</code> enum</td>
+<td>Manual <code>json[&quot;method&quot;] = ...</code> stringly-typed</td>
+</tr>
+<tr>
+<td><strong>Process management</strong></td>
+<td><strong>RAII</strong> — no zombies, noexcept <code>terminate()</code>, idempotent <code>wait()</code></td>
+<td><code>popen()</code> (leaks, no stderr), or <code>boost::process</code> (heavy dep)</td>
+</tr>
+<tr>
+<td><strong>Reactor</strong></td>
+<td><strong>epoll/kqueue/select</strong> — hand-written, ~500 LOC</td>
+<td><code>boost::asio</code> (powerful but ~500KB binary bloat)</td>
+</tr>
+<tr>
+<td><strong>Coroutine lifetime</strong></td>
+<td><strong><code>DetachedTask</code></strong> — auto-destroy on completion, no leaks</td>
+<td>Manual <code>handle.destroy()</code> or <code>std::suspend_always</code> + leaks</td>
+</tr>
+<tr>
+<td><strong>Cancellation</strong></td>
+<td><strong><code>CancellationToken</code></strong> — thread-safe, <code>throw_if_cancelled()</code></td>
+<td>None, or ad-hoc <code>std::atomic&lt;bool&gt;</code></td>
+</tr>
+<tr>
+<td><strong>Type-erased handlers</strong></td>
+<td><strong><code>ToolHandler</code></strong> — move-only, type-safe</td>
+<td><code>std::function</code> (requires copyable, heap-allocates)</td>
+</tr>
+<tr>
+<td><strong>Object lookups</strong></td>
+<td><strong>Transparent hash/eq</strong> — <code>std::string_view</code> lookup, zero allocation</td>
+<td><code>std::string</code> key allocation on every <code>obj[&quot;key&quot;]</code></td>
+</tr>
+<tr>
+<td><strong>Buffer safety</strong></td>
+<td><strong><code>std::span&lt;std::byte&gt;</code></strong> — bounds-safe, zero-copy</td>
+<td>Raw <code>char*</code> + size, or <code>std::vector</code> copies</td>
+</tr>
+<tr>
+<td><strong>Header-only</strong></td>
+<td><strong>Yes</strong> — drop into <code>include/</code> and build</td>
+<td>Usually compiled library + headers</td>
+</tr>
+<tr>
+<td><strong>Binary size</strong></td>
+<td><strong>Minimal</strong> — only OS networking code linked</td>
+<td>Large (boost, asio, nlohmann templates)</td>
+</tr>
+<tr>
+<td><strong>Compile time</strong></td>
+<td><strong>Fast</strong> — no heavy template instantiations</td>
+<td>Slow (boost/asio/nlohmann template explosion)</td>
+</tr>
+<tr>
+<td><strong>Cross-platform</strong></td>
+<td><strong>Mac/Linux/Windows</strong> — unified API, <code>NOMINMAX</code>, <code>WIN32_LEAN_AND_MEAN</code></td>
+<td>Often POSIX-only or Windows-only</td>
+</tr>
+<tr>
+<td><strong>LLM integration</strong></td>
+<td><strong><code>parse_lenient()</code></strong> — repairs unclosed containers, strips Markdown</td>
+<td>Requires perfect JSON from the model</td>
+</tr>
+<tr>
+<td><strong>Connection persistence</strong></td>
+<td><strong>Multi-request loop</strong> — one connection, many requests</td>
+<td>Often one-request-per-connection</td>
+</tr>
+<tr>
+<td><strong>Line framing</strong></td>
+<td><strong><code>\r\n</code> aware</strong> — trims trailing <code>CR</code></td>
+<td>Usually assumes <code>\n</code> only</td>
+</tr>
+<tr>
+<td><strong>Server shutdown</strong></td>
+<td><strong><code>CancellationToken</code> + <code>stop()</code></strong> — clean, non-blocking</td>
+<td>Often <code>kill</code> or <code>SIGTERM</code> + zombie</td>
+</tr>
+<tr>
+<td><strong>Code conventions</strong></td>
+<td><strong>Allman, single-return, smart pointers, no globals</strong></td>
+<td>Mixed style, raw pointers, multiple returns</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="limitations-and-gotchas">Limitations and Gotchas</h2>
+<ol>
+<li><strong>Windows <code>select</code> limit:</strong> The reactor uses <code>select()</code> on Windows, limited to <code>FD_SETSIZE</code> (1024) concurrent sockets. For high-scale Windows deployments, IOCP support would be needed.</li>
+<li><strong>Windows IPC latency:</strong> <code>AsyncPipe</code> on Windows uses <code>PeekNamedPipe</code> polling (100ms timeout). For high-performance Windows IPC, IOCP is required.</li>
+<li><strong>No streaming/SAX JSON:</strong> The whole document must be in memory. For very large JSON payloads, a streaming parser would be needed.</li>
+<li><strong><code>sync_wait</code> deadlocks:</strong> Calling <code>sync_wait</code> inside a reactor thread blocks that thread. Use <code>ThreadPool::run()</code> instead.</li>
+<li><strong><code>std::move_only_function</code> availability:</strong> If your standard library doesn't have it, <code>poorimcp.hpp</code> provides a <code>ToolHandler</code> class with the same semantics.</li>
+<li><strong>No TLS/SSL:</strong> TCP transport is plaintext. For production MCP over network, add TLS (OpenSSL or platform APIs).</li>
+<li><strong>Single server per port:</strong> The server binds one port. For multi-port or multi-transport servers, use multiple <code>MCPServer</code> instances on separate threads.</li>
+<li><strong>Coroutine frame heap allocation:</strong> Each <code>co_await</code> creates a coroutine frame on the heap. For ultra-low-latency scenarios, a pooled allocator could be added.</li>
+<li><strong>Object key order is unspecified:</strong> <code>std::unordered_map</code> does not preserve insertion order. If key order matters for protocol compliance, switch to <code>std::map</code> or <code>nlohmann::ordered_json</code>.</li>
+<li><strong><code>ToolHandler</code> always heap-allocates:</strong> No small-buffer-optimization. For high-frequency tool dispatch, consider a pooled allocator.</li>
+</ol>
+<hr>
+<h2 id="license">License</h2>
+<p>Apache License 2.0 — see the headers of each <code>.hpp</code> file.</p>
+<hr>
+<p><strong>Author:</strong> Pooria Yousefi</p>
+<hr>
+
+            
+            
+        </body>
+        </html>
