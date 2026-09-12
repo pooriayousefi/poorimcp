@@ -346,6 +346,105 @@ namespace pooriayousefi::core
         }
     };
 
+    // ---- DetachedTask: self-destroying coroutine ----
+    //
+    // Starts suspended (lazy). When resumed, runs to completion. On
+    // completion, the FinalAwaitable destroys the frame — no leak.
+    // Must be detached before the handle is resumed on another thread.
+
+    struct DetachedTask
+    {
+        struct Promise
+        {
+            [[nodiscard]] DetachedTask get_return_object() noexcept
+            {
+                return DetachedTask{std::coroutine_handle<Promise>::from_promise(*this)};
+            }
+
+            std::suspend_always initial_suspend() noexcept
+            {
+                return {};
+            }
+
+            struct FinalAwaitable
+            {
+                bool await_ready() const noexcept
+                {
+                    return false;
+                }
+
+                std::coroutine_handle<> await_suspend(std::coroutine_handle<Promise> h) noexcept
+                {
+                    h.destroy();
+                    return std::noop_coroutine();
+                }
+
+                void await_resume() noexcept
+                {
+                }
+            };
+
+            FinalAwaitable final_suspend() noexcept
+            {
+                return {};
+            }
+
+            void return_void() noexcept
+            {
+            }
+
+            [[noreturn]] void unhandled_exception()
+            {
+                std::terminate();
+            }
+        };
+
+        using promise_type = Promise;
+
+        std::coroutine_handle<Promise> handle{nullptr};
+
+        explicit DetachedTask(std::coroutine_handle<Promise> h) noexcept : handle{h}
+        {
+        }
+
+        DetachedTask() noexcept = default;
+
+        DetachedTask(DetachedTask&& other) noexcept : handle{other.handle}
+        {
+            other.handle = nullptr;
+        }
+
+        DetachedTask& operator=(DetachedTask&& other) noexcept
+        {
+            if (this != &other)
+            {
+                if (handle)
+                {
+                    handle.destroy();
+                }
+                handle = other.handle;
+                other.handle = nullptr;
+            }
+            return *this;
+        }
+
+        ~DetachedTask()
+        {
+            if (handle)
+            {
+                handle.destroy();
+            }
+        }
+
+        DetachedTask(DetachedTask const&) = delete;
+        DetachedTask& operator=(DetachedTask const&) = delete;
+
+        void detach() noexcept
+        {
+            handle = nullptr;
+        }
+    };
+
     // Awaitable Task
     template <class T>
     struct AsyncTask

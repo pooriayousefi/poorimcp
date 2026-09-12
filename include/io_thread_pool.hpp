@@ -43,16 +43,6 @@
     #include <sys/socket.h>
     #include <netdb.h>
     #include <netinet/in.h>
-#elif defined(_WIN32)
-    #ifndef NOMINMAX
-        #define NOMINMAX
-    #endif
-    #ifndef WIN32_LEAN_AND_MEAN
-        #define WIN32_LEAN_AND_MEAN
-    #endif
-    #include <winsock2.h>
-    #include <ws2tcpip.h>
-    #include <windows.h>
 #endif
 
 namespace pooriayousefi::io_bound
@@ -61,30 +51,6 @@ namespace pooriayousefi::io_bound
 
     // ---- Cross-platform socket abstraction ----
 
-#if defined(_WIN32)
-    using socket_t = SOCKET;
-    inline constexpr socket_t INVALID_SOCK = INVALID_SOCKET;
-    inline constexpr int SOCK_ERR = SOCKET_ERROR;
-
-    inline void close_socket_impl(socket_t s)
-    {
-        closesocket(s);
-    }
-
-    inline bool set_nonblocking(socket_t s)
-    {
-        u_long mode = 1;
-        return ioctlsocket(s, FIONBIO, &mode) == 0;
-    }
-
-    inline int get_socket_error()
-    {
-        return WSAGetLastError();
-    }
-
-    inline constexpr int SOCKET_EWOULDBLOCK = WSAEWOULDBLOCK;
-    inline constexpr int SOCKET_EINPROGRESS = WSAEWOULDBLOCK;
-#else
     using socket_t = int;
     inline constexpr socket_t INVALID_SOCK = -1;
     inline constexpr int SOCK_ERR = -1;
@@ -106,108 +72,8 @@ namespace pooriayousefi::io_bound
 
     inline constexpr int SOCKET_EWOULDBLOCK = EWOULDBLOCK;
     inline constexpr int SOCKET_EINPROGRESS = EINPROGRESS;
-#endif
 
-    // ---- DetachedTask: self-destroying coroutine for ThreadPool::run() ----
-    //
-    // Starts suspended (lazy). When resumed, runs to completion. On
-    // completion, the FinalAwaitable destroys the frame — no leak.
-    // Must be detached before the handle is resumed on another thread.
-
-    struct DetachedTask
-    {
-        struct Promise
-        {
-            [[nodiscard]] DetachedTask get_return_object() noexcept
-            {
-                return DetachedTask{std::coroutine_handle<Promise>::from_promise(*this)};
-            }
-
-            std::suspend_always initial_suspend() noexcept
-            {
-                return {};
-            }
-
-            struct FinalAwaitable
-            {
-                bool await_ready() const noexcept
-                {
-                    return false;
-                }
-
-                std::coroutine_handle<> await_suspend(std::coroutine_handle<Promise> h) noexcept
-                {
-                    h.destroy();
-                    return std::noop_coroutine();
-                }
-
-                void await_resume() noexcept
-                {
-                }
-            };
-
-            FinalAwaitable final_suspend() noexcept
-            {
-                return {};
-            }
-
-            void return_void() noexcept
-            {
-            }
-
-            [[noreturn]] void unhandled_exception()
-            {
-                std::terminate();
-            }
-        };
-
-        using promise_type = Promise;
-
-        std::coroutine_handle<Promise> handle{nullptr};
-
-        explicit DetachedTask(std::coroutine_handle<Promise> h) noexcept : handle{h}
-        {
-        }
-
-        DetachedTask() noexcept = default;
-
-        DetachedTask(DetachedTask&& other) noexcept : handle{other.handle}
-        {
-            other.handle = nullptr;
-        }
-
-        DetachedTask& operator=(DetachedTask&& other) noexcept
-        {
-            if (this != &other)
-            {
-                if (handle)
-                {
-                    handle.destroy();
-                }
-                handle = other.handle;
-                other.handle = nullptr;
-            }
-            return *this;
-        }
-
-        ~DetachedTask()
-        {
-            if (handle)
-            {
-                handle.destroy();
-            }
-        }
-
-        DetachedTask(DetachedTask const&) = delete;
-        DetachedTask& operator=(DetachedTask const&) = delete;
-
-        void detach() noexcept
-        {
-            handle = nullptr;
-        }
-    };
-
-    // ---- NetworkReactor: per-thread event loop (epoll / kqueue / select) ----
+    // ---- NetworkReactor: per-thread event loop (epoll / kqueue) ----
 
     class NetworkReactor
     {
@@ -246,25 +112,6 @@ namespace pooriayousefi::io_bound
         // Set by run(), read by AsyncSocket / AsyncPipe constructors.
         static thread_local NetworkReactor* current;
 
-#if defined(_WIN32)
-    private:
-        struct WSAInitializer
-        {
-            WSAInitializer()
-            {
-                WSADATA wsaData;
-                WSAStartup(MAKEWORD(2, 2), &wsaData);
-            }
-
-            ~WSAInitializer()
-            {
-                WSACleanup();
-            }
-        };
-
-        inline static WSAInitializer wsa_init_;
-#endif
-
     private:
         std::deque<MoveOnlyFunction> queue_;
         std::mutex mtx_;
@@ -279,8 +126,6 @@ namespace pooriayousefi::io_bound
 #elif defined(__APPLE__) || defined(__FreeBSD__)
         int kqueue_fd_{-1};
         int wake_pipe_[2]{-1, -1};
-#elif defined(_WIN32)
-        // Windows uses select() with a 100ms timeout — no special wake fd.
 #endif
 
     public:
@@ -396,7 +241,6 @@ namespace pooriayousefi::io_bound
                 static_cast<void>(::write(wake_pipe_[1], &val, 1));
             }
 #endif
-            // Windows: select() has a 100ms timeout — no wake mechanism.
         }
 
         void register_socket(socket_t fd, EventType type, MoveOnlyFunction cb)
@@ -573,85 +417,6 @@ namespace pooriayousefi::io_bound
                                 }
                                 write_cbs_.erase(fd);
                             }
-                        }
-                        if (cb)
-                        {
-                            cb();
-                        }
-                    }
-                }
-#elif defined(_WIN32)
-                fd_set read_fds;
-                fd_set write_fds;
-                FD_ZERO(&read_fds);
-                FD_ZERO(&write_fds);
-
-                {
-                    std::lock_guard<std::mutex> lock(mtx_);
-                    for (const auto& pair : read_cbs_)
-                    {
-                        FD_SET(pair.first, &read_fds);
-                    }
-                    for (const auto& pair : write_cbs_)
-                    {
-                        FD_SET(pair.first, &write_fds);
-                    }
-                }
-
-                struct timeval tv;
-                tv.tv_sec = 0;
-                tv.tv_usec = 100000; // 100ms
-
-                int n = select(0, &read_fds, &write_fds, nullptr, &tv);
-                if (n > 0)
-                {
-                    std::vector<socket_t> ready_reads;
-                    std::vector<socket_t> ready_writes;
-                    {
-                        std::lock_guard<std::mutex> lock(mtx_);
-                        for (const auto& pair : read_cbs_)
-                        {
-                            if (FD_ISSET(pair.first, &read_fds))
-                            {
-                                ready_reads.push_back(pair.first);
-                            }
-                        }
-                        for (const auto& pair : write_cbs_)
-                        {
-                            if (FD_ISSET(pair.first, &write_fds))
-                            {
-                                ready_writes.push_back(pair.first);
-                            }
-                        }
-                    }
-                    for (socket_t fd : ready_reads)
-                    {
-                        MoveOnlyFunction cb;
-                        {
-                            std::lock_guard<std::mutex> lock(mtx_);
-                            auto it = read_cbs_.find(fd);
-                            if (it != read_cbs_.end())
-                            {
-                                cb = std::move(it->second);
-                            }
-                            read_cbs_.erase(fd);
-                        }
-                        if (cb)
-                        {
-                            cb();
-                        }
-                    }
-                    for (socket_t fd : ready_writes)
-                    {
-                        MoveOnlyFunction cb;
-                        {
-                            std::lock_guard<std::mutex> lock(mtx_);
-                            auto it = write_cbs_.find(fd);
-                            if (it != write_cbs_.end())
-                            {
-                                cb = std::move(it->second);
-                            }
-                            write_cbs_.erase(fd);
                         }
                         if (cb)
                         {
@@ -994,23 +759,19 @@ namespace pooriayousefi::io_bound
         void assign_write(socket_t fd)
         {
             write_fd_ = fd;
-#ifndef _WIN32
             if (write_fd_ != INVALID_SOCK)
             {
                 set_nonblocking(write_fd_);
             }
-#endif
         }
 
         void assign_read(socket_t fd)
         {
             read_fd_ = fd;
-#ifndef _WIN32
             if (read_fd_ != INVALID_SOCK)
             {
                 set_nonblocking(read_fd_);
             }
-#endif
         }
 
         void close()
@@ -1084,27 +845,6 @@ namespace pooriayousefi::io_bound
 
                 while (total_sent < buf.size() && !error_occurred)
                 {
-#if defined(_WIN32)
-                    // Windows anonymous pipes do not support non-blocking writes easily.
-                    // We block here. For high-performance Windows IPC, IOCP is required.
-                    DWORD bytes_written = 0;
-                    BOOL success = WriteFile(
-                        reinterpret_cast<HANDLE>(write_fd_),
-                        buf.data() + total_sent,
-                        static_cast<DWORD>(buf.size() - total_sent),
-                        &bytes_written,
-                        nullptr
-                    );
-                    if (!success)
-                    {
-                        result = std::unexpected(std::make_error_code(std::errc::io_error));
-                        error_occurred = true;
-                    }
-                    else
-                    {
-                        total_sent += bytes_written;
-                    }
-#else
                     ssize_t n = ::write(write_fd_, buf.data() + total_sent, buf.size() - total_sent);
                     if (n < 0)
                     {
@@ -1122,7 +862,6 @@ namespace pooriayousefi::io_bound
                     {
                         total_sent += static_cast<std::size_t>(n);
                     }
-#endif
                 }
 
                 if (!error_occurred)
@@ -1144,60 +883,6 @@ namespace pooriayousefi::io_bound
             }
             else
             {
-#if defined(_WIN32)
-                // Windows pipe workaround: PeekNamedPipe to poll for data,
-                // yielding to the reactor when no data is available.
-                HANDLE h_read = reinterpret_cast<HANDLE>(read_fd_);
-                bool done = false;
-
-                while (!done)
-                {
-                    DWORD bytes_available = 0;
-                    BOOL success = PeekNamedPipe(
-                        h_read,
-                        nullptr,
-                        0,
-                        nullptr,
-                        &bytes_available,
-                        nullptr
-                    );
-
-                    if (!success)
-                    {
-                        result = std::unexpected(std::make_error_code(std::errc::broken_pipe));
-                        done = true;
-                    }
-                    else if (bytes_available > 0)
-                    {
-                        DWORD to_read = static_cast<DWORD>(
-                            std::min<DWORD>(bytes_available, static_cast<DWORD>(buf.size()))
-                        );
-                        DWORD bytes_read = 0;
-                        success = ReadFile(
-                            h_read,
-                            buf.data(),
-                            to_read,
-                            &bytes_read,
-                            nullptr
-                        );
-
-                        if (success)
-                        {
-                            result = static_cast<std::size_t>(bytes_read);
-                        }
-                        else
-                        {
-                            result = std::unexpected(std::make_error_code(std::errc::io_error));
-                        }
-                        done = true;
-                    }
-                    else
-                    {
-                        // No data available — yield execution to the reactor.
-                        co_await reactor_->yield();
-                    }
-                }
-#else
                 bool done = false;
 
                 while (!done)
@@ -1221,7 +906,6 @@ namespace pooriayousefi::io_bound
                         done = true;
                     }
                 }
-#endif
             }
 
             co_return result;
