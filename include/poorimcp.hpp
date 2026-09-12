@@ -26,23 +26,12 @@
 #include "io_thread_pool.hpp"
 #include "poorijson.hpp"
 #include "poorijsonrpc.hpp"
-#include "pooriprocess.hpp"
+#include "process.hpp"
 
-#if defined(_WIN32)
-    #ifndef NOMINMAX
-        #define NOMINMAX
-    #endif
-    #ifndef WIN32_LEAN_AND_MEAN
-        #define WIN32_LEAN_AND_MEAN
-    #endif
-    #include <winsock2.h>
-    #include <ws2tcpip.h>
-#else
-    #include <sys/socket.h>
-    #include <netinet/in.h>
-    #include <unistd.h>
-    #include <arpa/inet.h>
-#endif
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <unistd.h>
+#include <arpa/inet.h>
 
 namespace pooriayousefi::mcp
 {
@@ -229,8 +218,6 @@ namespace pooriayousefi::mcp
                             else
                             {
                                 raw.append(chunk, *recv_result);
-                                // Connection: close — server closes after sending.
-                                // Keep reading until EOF.
                             }
                         }
 
@@ -415,8 +402,6 @@ namespace pooriayousefi::mcp
             }
             else if (type_ == Type::HTTP && http_client_)
             {
-                // For HTTP, send is a no-op — the actual send happens in recv
-                // (we POST the request and read the response together).
                 result = buf.size();
             }
 
@@ -435,7 +420,6 @@ namespace pooriayousefi::mcp
             }
             else if (type_ == Type::HTTP && http_client_)
             {
-                // For HTTP, recv is a no-op — the actual recv happened in send.
                 result = 0;
             }
 
@@ -492,24 +476,36 @@ namespace pooriayousefi::mcp
     };
 
     // ----------------------------------------------------------------
-    //  MCPServer — async MCP server with tool registration
+    //  MCPServer — async MCP server (STDIO + HTTP)
     // ----------------------------------------------------------------
 
     class MCPServer
     {
     public:
+        enum class Type
+        {
+            STDIO,
+            HTTP
+        };
+
         using ToolMap = std::unordered_map<std::string, std::pair<MCPTool, ToolHandler>,
                                            JSONStringHash, JSONStringEqual>;
 
     private:
+        Type type_{Type::STDIO};
         int port_{-1};
         ToolMap tools_{};
         socket_t listen_fd_{INVALID_SOCK};
         CancellationToken token_{};
 
     public:
-        explicit MCPServer(int port)
-            : port_{port}
+        // STDIO mode — reads from stdin, writes to stdout.
+        MCPServer() : type_{Type::STDIO}
+        {
+        }
+
+        // HTTP mode — listens on a TCP port for HTTP POST requests.
+        explicit MCPServer(int port) : type_{Type::HTTP}, port_{port}
         {
         }
 
@@ -541,6 +537,54 @@ namespace pooriayousefi::mcp
         }
 
         AsyncTask<void> start()
+        {
+            if (type_ == Type::STDIO)
+            {
+                co_await start_stdio();
+            }
+            else
+            {
+                co_await start_http();
+            }
+
+            co_return;
+        }
+
+    private:
+        // ── STDIO mode: newline-delimited JSON-RPC over stdin/stdout ──
+
+        AsyncTask<void> start_stdio()
+        {
+            std::cout << "MCP Server (STDIO) running...\n";
+
+            std::string line;
+
+            while (!token_.is_cancelled() && std::getline(std::cin, line))
+            {
+                if (!line.empty() && line.back() == '\r')
+                {
+                    line.pop_back();
+                }
+
+                if (line.empty())
+                {
+                    continue;
+                }
+
+                auto parsed_req = parse(line);
+                if (parsed_req)
+                {
+                    JSON resp = co_await handle_rpc(*parsed_req);
+                    std::cout << resp.dump() << "\n" << std::flush;
+                }
+            }
+
+            co_return;
+        }
+
+        // ── HTTP mode: HTTP POST server on a TCP port ──
+
+        AsyncTask<void> start_http()
         {
             NetworkReactor* reactor = NetworkReactor::current;
 
@@ -579,16 +623,14 @@ namespace pooriayousefi::mcp
                     }
                     else
                     {
-                        std::cout << "MCP Server listening on port " << port_ << "...\n";
+                        std::cout << "MCP Server (HTTP) listening on port "
+                                  << port_ << "...\n";
 
                         while (!token_.is_cancelled())
                         {
                             struct sockaddr_in client_addr{};
-#if defined(_WIN32)
-                            int addrlen = static_cast<int>(sizeof(client_addr));
-#else
                             socklen_t addrlen = sizeof(client_addr);
-#endif
+
                             socket_t client_fd = accept(listen_fd_,
                                 reinterpret_cast<struct sockaddr*>(&client_addr), &addrlen);
 
@@ -622,7 +664,6 @@ namespace pooriayousefi::mcp
             co_return;
         }
 
-    private:
         AsyncTask<void> handle_client(socket_t client_fd)
         {
             AsyncSocket sock;
@@ -720,7 +761,7 @@ namespace pooriayousefi::mcp
 
             sock.close();
             co_return;
-        }    
+        }
 
         AsyncTask<JSON> handle_rpc(const JSON& req)
         {
@@ -744,7 +785,18 @@ namespace pooriayousefi::mcp
 
                     if (method == "initialize")
                     {
-                        resp = make_response(JSON({{"status", "ready"}}), req["id"]);
+                        JSON server_info;
+                        server_info["name"] = "poorimcp-server";
+                        server_info["version"] = "1.0.0";
+
+                        JSON caps;
+                        caps["tools"] = JSONObject{};
+
+                        JSON result_obj;
+                        result_obj["protocolVersion"] = "2026-07-24";
+                        result_obj["serverInfo"] = server_info;
+                        result_obj["capabilities"] = caps;
+                        resp = make_response(std::move(result_obj), req["id"]);
                     }
                     else if (method == "tools/list")
                     {
@@ -851,7 +903,10 @@ namespace pooriayousefi::mcp
             std::expected<void, std::string> result{};
 
             JSON init_params;
-            init_params["protocolVersion"] = "2024-11-05";
+            init_params["protocolVersion"] = "2026-07-24";
+            init_params["capabilities"] = JSONObject{};
+            init_params["clientInfo"]["name"] = "poorimcp-client";
+            init_params["clientInfo"]["version"] = "1.0.0";
             JSON init_req = make_request("initialize", init_params, request_id_++);
 
             auto init_resp = co_await send_rpc_async(init_req);
