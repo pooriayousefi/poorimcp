@@ -1,7 +1,7 @@
 
 # PooriMCP
 
-A production-grade, fully asynchronous C++23 implementation of the Model Context Protocol (MCP). It combines a zero-dependency JSON library, a JSON-RPC 2.0 framework, a cross-platform process manager, and a coroutine-based async I/O reactor into a single, cohesive library — all built from first principles without any external dependencies.
+A production-grade, fully asynchronous C++23 implementation of the Model Context Protocol (MCP). It combines a zero-dependency JSON library, a JSON-RPC 2.0 framework, a cross-platform process manager, and a coroutine-based async thread pool into a single, cohesive library — all built from first principles without any external dependencies.
 
 ```cpp
 #include "poorimcp.hpp"
@@ -11,8 +11,8 @@ using namespace pooriayousefi::mcp;
 int main() {
     ThreadPool pool{4};
 
-    // --- Server side ---
-    MCPServer server{9876};
+    // --- Server side (HTTP mode) ---
+    MCPServer server{9876}; // Use MCPServer{} for STDIO mode
     server.register_tool(
         MCPTool{"echo", "Echoes back input", JSON(nullptr)},
         [](const JSON& args) -> AsyncTask<JSON> {
@@ -55,7 +55,7 @@ int main() {
   - [Features](#features)
     - [JSON Foundation (`poorijson.hpp`)](#json-foundation-poorijsonhpp)
     - [JSON-RPC 2.0 (`poorijsonrpc.hpp`)](#json-rpc-20-poorijsonrpchpp)
-    - [Process Management (`pooriprocess.hpp`)](#process-management-pooriprocesshpp)
+    - [Process Management (`process.hpp`)](#process-management-processhpp)
     - [Async I/O (`asyncore.hpp` + `io_thread_pool.hpp`)](#async-io-asyncorehpp--io_thread_poolhpp)
     - [HTTP Client (`poorimcp.hpp` — `AsyncHTTPClient`)](#http-client-poorimcphpp--asynchttpclient)
     - [MCP Layer (`poorimcp.hpp`)](#mcp-layer-poorimcphpp)
@@ -87,10 +87,10 @@ Most MCP implementations are thin wrappers around existing JSON and HTTP librari
 |-------|-------------------|----------|
 | JSON | `nlohmann/json` (exception-based, heap-heavy) | `poorijson` — `std::expected`-based, transparent hashmap, zero-allocation lookups |
 | RPC | Manual `if/else` on JSON fields | `poorijsonrpc` — typed builders, `classify()`, `ErrorCode` enum |
-| Process | `popen()` or `boost::process` | `pooriprocess` — RAII, no zombies, noexcept `terminate()`, cross-platform |
-| Async I/O | `boost::asio` or callbacks | `pooriasync` — C++23 coroutines, epoll/kqueue/select reactor, `DetachedTask` |
-| HTTP | `cpp-httplib` or `libcurl` | `AsyncHTTPClient` — built on `AsyncSocket`, no external deps |
-| MCP | Glue layer | `poorimcp` — `MCPServer`, `MCPClient`, `MCPTransport`, `ToolHandler` |
+| Process | `popen()` or `boost::process` | `process.hpp` — Cross-platform RAII (POSIX `fork` / Win `CreateProcessA`), no zombies |
+| Async I/O | `boost::asio` or callbacks | `pooriasync` — C++23 coroutines, Standard Thread Pool with `run_blocking()` bridging |
+| HTTP | `cpp-httplib` or `libcurl` | `AsyncHTTPClient` — built on native cross-platform sockets, no external deps |
+| MCP | Glue layer | `poorimcp` — `MCPServer` (STDIO+HTTP), `MCPClient`, `MCPTransport`, `ToolHandler` |
 
 **No `boost`. No `nlohmann`. No `asio`. No `libuv`. No `cpp-httplib`. No exceptions for control flow.**
 
@@ -112,18 +112,16 @@ Most MCP implementations are thin wrappers around existing JSON and HTTP librari
 │         ▼                      ▼               │
 │  ┌──────────────────────────────────────────┐  │
 │  │         io_thread_pool.hpp               │  │
-│  │   NetworkReactor (epoll/kqueue/select)   │  │
-│  │   AsyncSocket / AsyncPipe                │  │
-│  │   ThreadPool / DetachedTask              │  │
+│  │   ThreadPool (Standard C++ Threads)      │  │
+│  │   run_blocking (Park coroutines for I/O) │  │
 │  └──────────┬──────────────────┬────────────┘  │
 │             │                  │               │
 │  ┌──────────▼─────┐  ┌────────▼─────────┐      │
-│  │  asyncore.hpp  │  │ pooriprocess.hpp │      │
+│  │  asyncore.hpp  │  │  process.hpp     │      │
 │  │  AsyncTask<T>  │  │ Process (RAII)   │      │
-│  │  AsyncGenerator│  │ close_stdin()    │      │
-│  │  FireAndForget │  │ noexcept term.   │      │
-│  │  sync_wait     │  └──────────────────┘      │
-│  └────────────────┘                            │
+│  │  DetachedTask  │  │ fork/CreateProc  │      │
+│  │  Cancellation  │  │ read_stdout()    │      │
+│  └────────────────┘  └──────────────────┘      │
 │             │                                  │
 │  ┌──────────▼──────────────────────────────┐   │
 │  │          poorijson.hpp                  │   │
@@ -157,39 +155,35 @@ Most MCP implementations are thin wrappers around existing JSON and HTTP librari
 - **`classify()`** — structural classification of incoming messages (`REQUEST`, `NOTIFICATION`, `RESPONSE_SUCCESS`, `RESPONSE_ERROR`, `BATCH`, `INVALID`)
 - **Move-by-value optimization** — `params`, `result`, `data` taken by value and moved (no unnecessary copies)
 
-### Process Management (`pooriprocess.hpp`)
-- **RAII throughout** — `WindowsHandle` / `FileDescriptor` wrappers prevent leaks on every code path
+### Process Management (`process.hpp`)
+- **Cross-platform RAII** — POSIX `fork`+`execvp` and Windows `CreateProcessA`
 - **No zombies, no orphans** — destructor calls `terminate()` + `wait()` if child is still running
 - **Safe `running()`** — POSIX: reaps zombies and updates exit code (no `ECHILD` on subsequent `wait()`)
 - **Idempotent `wait()`** — returns cached exit code if already reaped
 - **Noexcept `terminate()`** — safe in destructors, signal handlers, cleanup paths
+- **Blocking I/O helpers** — `read_stdout()` and `write_stdin()` return `std::expected` and are designed to be wrapped inside `io_bound::run_blocking()`
 - **`close_stdin()`** — signals EOF to child so programs like `cat` exit cleanly
-- **`initializer_list` convenience** — `p.start("cat", {"hello"})`
 
 ### Async I/O (`asyncore.hpp` + `io_thread_pool.hpp`)
 - **C++23 coroutines** — `AsyncTask<T>`, `AsyncGenerator<T>`, `FireAndForget`, `DetachedTask`
-- **Symmetric transfer** — `FinalAwaitable` returns continuation handle for zero-overhead chaining
-- **Cross-platform reactor** — `epoll` (Linux), `kqueue` (Mac/BSD), `select` (Windows)
+- **Standard Thread Pool** — Cross-platform `std::thread` and `std::mutex` implementation. Highly portable across Mac, Linux, and Windows.
+- **`run_blocking()`** — Coroutine awaitable that safely parks the coroutine, executes a blocking OS call (like `::recv()` or `read_stdout()`) on a worker thread, and resumes the coroutine when data is ready. Eliminates the need for complex OS-specific reactors (epoll/IOCP).
 - **`DetachedTask`** — starts suspended, auto-destroys frame on completion; no leaks, no UB
 - **`CancellationToken`** — thread-safe, one-way cancel flag with `throw_if_cancelled()`
 - **`MoveOnlyFunction`** — type-erased, move-only callable (no `std::function` overhead)
-- **`std::span` buffers** — zero-copy, bounds-safe I/O
-- **`std::expected` errors** — transport I/O returns `std::expected<T, std::error_code>`, never throws
 
 ### HTTP Client (`poorimcp.hpp` — `AsyncHTTPClient`)
-- **Built on `AsyncSocket`** — no `cpp-httplib`, no `libcurl`, no external HTTP library
-- **`co_await post()` / `co_await get()`** — coroutine-based, non-blocking
+- **Built on Native Sockets** — no `cpp-httplib`, no `libcurl`, no external HTTP library
+- **Coroutine-based** — requests are dispatched via `co_await pool.run_blocking(...)`
 - **HTTP/1.1 parsing** — status line, headers, Content-Length, body extraction
-- **`Connection: close`** — simple, reliable request/response cycle
-- **`std::expected<std::string, std::error_code>`** — error-free return type
+- **SSE Streaming Support** — Natively parses `text/event-stream` responses, returning the first valid JSON-RPC payload found in the stream.
 
 ### MCP Layer (`poorimcp.hpp`)
 - **Official transports only** — STDIO (subprocess + pipes) and HTTP (Streamable HTTP POST)
 - **`MCPTransport`** — unified factory: `create_stdio()` / `create_http()`
-- **`MCPServer`** — HTTP server with tool registration, multi-request connection persistence, HTTP request parsing (Content-Length, headers, body extraction), HTTP response building
+- **`MCPServer`** — Supports both STDIO mode (default) and HTTP mode (takes port). Features tool registration, multi-request connection persistence, and HTTP request/response parsing.
 - **`MCPClient`** — async connect, initialize, tool discovery, tool invocation
 - **`ToolHandler`** — move-only, type-erased handler for `AsyncTask<JSON>(const JSON&)`
-- **`SocketAwaitable`** — public awaitable for raw socket event registration
 - **Transparent tool map** — zero-allocation tool lookup by `std::string_view`
 - **`rpc::make_*` integration** — uses `poorijsonrpc` helpers for all JSON-RPC message construction
 - **Graceful shutdown** — `CancellationToken` in server, `stop()` method
@@ -199,7 +193,8 @@ Most MCP implementations are thin wrappers around existing JSON and HTTP librari
 ## Requirements
 
 - **C++23** (`std::expected`, `std::coroutine`, `std::span`, `std::binary_semaphore`)
-- Clang 16+ (macOS/Linux), MSVC 19.34+ (Windows)
+- Clang 16+ (macOS/Linux), GCC 13+ (Linux), MSVC 19.34+ (Windows)
+- **Cross-Platform**: Mac, Linux, and Windows Native
 - No external dependencies
 
 ## Project Structure
@@ -212,7 +207,7 @@ poorimcp/
 │   ├── io_thread_pool.hpp
 │   ├── poorijson.hpp
 │   ├── poorijsonrpc.hpp
-│   ├── pooriprocess.hpp
+│   ├── process.hpp
 │   └── poorimcp.hpp
 ├── src/
 │   └── main.cpp
@@ -255,9 +250,7 @@ auto transport = MCPTransport::create_stdio(
 MCPClient client(std::move(transport));
 ```
 
-Internally: `Process` spawns the subprocess (`fork`+`execvp` on POSIX,
-`CreateProcessW` on Windows). `AsyncPipe` wraps the stdin/stdout pipes
-and registers them with the reactor (`epoll`/`kqueue`/`select`).
+Internally: `Process` spawns the subprocess (`fork`+`execvp` on POSIX, `CreateProcessA` on Windows). `MCPClient` uses `co_await pool.run_blocking()` to safely wrap the blocking `read_stdout()` and `write_stdin()` calls without stalling the event loop.
 
 ### 2. HTTP (Streamable HTTP)
 
@@ -269,8 +262,7 @@ auto transport = MCPTransport::create_http("localhost", 8931, "/mcp");
 MCPClient client(std::move(transport));
 ```
 
-Internally: `AsyncHTTPClient` builds an HTTP/1.1 request, sends it via
-`AsyncSocket`, and reads the response. No external HTTP library needed.
+Internally: `AsyncHTTPClient` builds an HTTP/1.1 request, sends it via native cross-platform sockets, and reads the response. It natively supports SSE (`text/event-stream`) responses to prevent connection hangs on streaming servers.
 
 ---
 
@@ -281,20 +273,16 @@ Internally: `AsyncHTTPClient` builds an HTTP/1.1 request, sends it via
 | `JSON` | `poorijson.hpp` | `std::variant`-backed JSON value with `std::expected` error handling |
 | `parse()` / `parse_lenient()` | `poorijson.hpp` | Strict RFC 8259 parser + LLM-tolerant repair |
 | `rpc::make_*` / `rpc::classify()` | `poorijsonrpc.hpp` | JSON-RPC 2.0 builders and message classifier |
-| `Process` | `pooriprocess.hpp` | RAII cross-platform process lifecycle |
+| `Process` | `process.hpp` | Cross-platform RAII process lifecycle |
 | `AsyncTask<T>` | `asyncore.hpp` | Lazy coroutine returning `T` |
-| `AsyncGenerator<T>` | `asyncore.hpp` | Lazy coroutine yielding multiple `T` |
-| `FireAndForget` | `asyncore.hpp` | Eager, self-managed coroutine |
-| `DetachedTask` | `io_thread_pool.hpp` | Lazy, auto-destroying coroutine for thread pools |
-| `NetworkReactor` | `io_thread_pool.hpp` | Per-thread event loop (epoll/kqueue/select) |
-| `AsyncSocket` | `io_thread_pool.hpp` | Non-blocking TCP with `co_await send/recv` |
-| `AsyncPipe` | `io_thread_pool.hpp` | Non-blocking IPC with `co_await send/recv` |
-| `ThreadPool` | `io_thread_pool.hpp` | Round-robin worker pool driving reactors |
+| `DetachedTask` | `asyncore.hpp` | Lazy, auto-destroying coroutine for thread pools |
+| `ThreadPool` | `io_thread_pool.hpp` | Standard C++ thread pool with coroutine bridging |
+| `run_blocking()` | `io_thread_pool.hpp` | Parks coroutine during blocking I/O |
 | `CancellationToken` | `asyncore.hpp` | Thread-safe cancel flag |
 | `MoveOnlyFunction` | `asyncore.hpp` | Type-erased move-only callable |
-| `AsyncHTTPClient` | `poorimcp.hpp` | HTTP/1.1 client built on `AsyncSocket` |
+| `AsyncHTTPClient` | `poorimcp.hpp` | HTTP/1.1 client built on native sockets |
 | `MCPTransport` | `poorimcp.hpp` | Unified STDIO/HTTP transport |
-| `MCPServer` | `poorimcp.hpp` | HTTP MCP server with tool registration |
+| `MCPServer` | `poorimcp.hpp` | STDIO/HTTP MCP server with tool registration |
 | `MCPClient` | `poorimcp.hpp` | Async MCP client with tool discovery |
 | `ToolHandler` | `poorimcp.hpp` | Move-only type-erased tool handler |
 
@@ -305,7 +293,7 @@ Internally: `AsyncHTTPClient` builds an HTTP/1.1 request, sends it via
 ### Server: Registering Tools
 
 ```cpp
-MCPServer server{9876};
+MCPServer server{9876}; // HTTP mode
 
 server.register_tool(
     MCPTool{"calculator", "Performs arithmetic", JSON({{"type", "object"}})},
@@ -404,9 +392,9 @@ MCPClient client(std::move(transport));
 | **Error handling** | **`std::expected<T, JSONError>`** — no exceptions for control flow | `std::optional`, exceptions, or raw error codes |
 | **JSON** | **Custom** — transparent hashmap (zero-alloc lookups), `std::to_chars`, `parse_lenient()` | `nlohmann/json` — heap allocations, exception-based |
 | **JSON-RPC** | **Typed builders** — `make_request()`, `classify()`, `ErrorCode` enum | Manual `json["method"] = ...` stringly-typed |
-| **Process management** | **RAII** — no zombies, noexcept `terminate()`, idempotent `wait()` | `popen()` (leaks, no stderr), or `boost::process` (heavy dep) |
-| **HTTP client** | **`AsyncHTTPClient`** — built on `AsyncSocket`, no external deps | `cpp-httplib` or `libcurl` (external dependency) |
-| **Reactor** | **epoll/kqueue/select** — hand-written, ~500 LOC | `boost::asio` (powerful but ~500KB binary bloat) |
+| **Process management** | **RAII Cross-platform** — no zombies, noexcept `terminate()`, `read_stdout()` | `popen()` (leaks, no stderr), or `boost::process` (heavy dep) |
+| **HTTP client** | **`AsyncHTTPClient`** — built on native sockets, no external deps | `cpp-httplib` or `libcurl` (external dependency) |
+| **Thread pool** | Standard C++ threads + `run_blocking()` coroutine bridge | `boost::asio` (powerful but ~500KB binary bloat) |
 | **Coroutine lifetime** | **`DetachedTask`** — auto-destroy on completion, no leaks | Manual `handle.destroy()` or `std::suspend_always` + leaks |
 | **Cancellation** | **`CancellationToken`** — thread-safe, `throw_if_cancelled()` | None, or ad-hoc `std::atomic<bool>` |
 | **Type-erased handlers** | **`ToolHandler`** — move-only, type-safe | `std::function` (requires copyable, heap-allocates) |
@@ -418,7 +406,7 @@ MCPClient client(std::move(transport));
 | **Cross-platform** | **Mac/Linux/Windows** — unified API, `NOMINMAX`, `WIN32_LEAN_AND_MEAN` | Often POSIX-only or Windows-only |
 | **LLM integration** | **`parse_lenient()`** — repairs unclosed containers, strips Markdown | Requires perfect JSON from the model |
 | **Transport** | **Official spec only** — STDIO + HTTP (Streamable HTTP) | Often custom TCP or non-spec-compliant |
-| **Server** | **HTTP server** — parses HTTP requests, builds HTTP responses | Often raw TCP or requires external HTTP server |
+| **Server** | **STDIO + HTTP server** — parses HTTP requests, builds HTTP responses, or uses stdin/stdout | Often raw TCP or requires external HTTP server |
 | **Connection persistence** | **Multi-request HTTP** — one connection, multiple requests | Often one-request-per-connection |
 | **Server shutdown** | **`CancellationToken` + `stop()`** — clean, non-blocking | Often `kill` or `SIGTERM` + zombie |
 | **Code conventions** | **Allman, single-return, smart pointers, no globals** | Mixed style, raw pointers, multiple returns |
@@ -427,18 +415,13 @@ MCPClient client(std::move(transport));
 
 ## Limitations and Gotchas
 
-1. **No chunked encoding:** `AsyncHTTPClient` uses `Connection: close` and reads until EOF. For chunked transfer encoding or keep-alive, extend the client.
-2. **No TLS/SSL:** HTTP transport is plaintext. For production MCP over network, add TLS (OpenSSL or platform APIs).
-3. **Windows `select` limit:** The reactor uses `select()` on Windows, limited to `FD_SETSIZE` (1024) concurrent sockets.
-4. **Windows IPC latency:** `AsyncPipe` on Windows uses `PeekNamedPipe` polling (100ms timeout). For high-performance Windows IPC, IOCP is required.
-5. **No streaming/SAX JSON:** The whole document must be in memory. For very large JSON payloads, a streaming parser would be needed.
-6. **`sync_wait` deadlocks:** Calling `sync_wait` inside a reactor thread blocks that thread. Use `ThreadPool::run()` instead.
-7. **Thread-Local reactor:** `AsyncSocket`, `AsyncPipe`, and `AsyncHTTPClient` rely on `NetworkReactor::current` (thread-local). You cannot use them on a thread that is not part of the `ThreadPool`.
-8. **Coroutine frame heap allocation:** Each `co_await` creates a coroutine frame on the heap. For ultra-low-latency scenarios, a pooled allocator could be added.
-9. **Object key order is unspecified:** `std::unordered_map` does not preserve insertion order. If key order matters for protocol compliance, switch to `std::map`.
-10. **`ToolHandler` always heap-allocates:** No small-buffer-optimization (SBO). For high-frequency tool dispatch, consider a pooled allocator.
-11. **MCPServer is HTTP-only:** The server accepts HTTP POST requests and responds with HTTP. It does not support STDIO mode (STDIO servers are standalone programs, not embedded classes).
-12. **No SSE streaming:** The HTTP transport does not support Server-Sent Events. Each request gets a single response. For streaming MCP servers, SSE support would be needed.
+1. **No TLS/SSL:** HTTP transport is plaintext. For production MCP over network, add TLS (OpenSSL or platform APIs).
+2. **No chunked HTTP encoding:** `AsyncHTTPClient` uses `Connection: close` and reads until EOF. It supports SSE streams, but does not support HTTP/1.1 chunked transfer encoding.
+3. **No streaming/SAX JSON:** The whole document must be in memory. For very large JSON payloads, a streaming parser would be needed.
+4. **`sync_wait` deadlocks:** Never call `sync_wait()` inside a `ThreadPool` worker thread. It will block the worker, preventing the coroutines scheduled on that pool from ever resuming. Use `ThreadPool::run()` from the main thread instead.
+5. **Coroutine frame heap allocation:** Each `co_await` creates a frame on the heap. For ultra-low-latency scenarios, a pooled allocator could be added.
+6. **Object key order is unspecified:** `std::unordered_map` does not preserve insertion order. If key order matters for protocol compliance, switch to `std::map`.
+7. **`ToolHandler` always heap-allocates:** No small-buffer-optimization (SBO). For high-frequency tool dispatch, consider a pooled allocator.
 
 ---
 
